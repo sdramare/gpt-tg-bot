@@ -18,32 +18,32 @@ pub struct Message {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
-    pub id: String,
-    pub object: String,
-    pub created: i64,
-    pub model: String,
-    pub choices: Vec<Choice>,
-    pub usage: Usage,
+    id: String,
+    object: String,
+    created: i64,
+    model: String,
+    choices: Vec<Choice>,
+    usage: Usage,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Choice {
-    pub index: i32,
-    pub message: ResponseMessage,
-    pub finish_reason: String,
+    index: i32,
+    message: ResponseMessage,
+    finish_reason: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResponseMessage {
-    pub role: String,
-    pub content: String,
+    role: String,
+    content: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Usage {
-    pub prompt_tokens: i32,
-    pub completion_tokens: i32,
-    pub total_tokens: i32,
+    prompt_tokens: i32,
+    completion_tokens: i32,
+    total_tokens: i32,
 }
 
 #[derive(Debug)]
