@@ -17,6 +17,7 @@ pub struct Message {
     pub(crate) chat: Chat,
     pub(crate) date: i64,
     pub(crate) text: Option<String>,
+    pub(crate) reply_to_message: Option<Box<Message>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

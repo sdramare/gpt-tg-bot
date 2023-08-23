@@ -24,10 +24,7 @@ async fn function_handler(
         Error::from(format!("Bad payload. Error {error}. Body {body}"))
     })?;
 
-    let status_code = match update
-        .and_then(|x| x.message)
-        .and_then(|message| message.text.map(|text| (text, message.chat)))
-    {
+    let status_code = match update.and_then(|x| x.message) {
         None => {
             let empty: String = String::new();
             let body: &String = match event.body() {
@@ -40,17 +37,23 @@ async fn function_handler(
             reqwest::StatusCode::OK
         }
         Some(message) => {
-            if message.0.contains(tg_bot_name) {
-                let text = message.0.replace(tg_bot_name, "");
-                let result = gtp_client.get_completion(text).await?;
+            if let Some(text) = message.text {
+                if text.contains(tg_bot_name)
+                    || message
+                        .reply_to_message
+                        .is_some_and(|reply| reply.from.is_bot)
+                {
+                    let text = text.replace(tg_bot_name, "");
+                    let result = gtp_client.get_completion(text).await?;
 
-                tg_client
-                    .send_message_async(
-                        message.1.id,
-                        result,
-                        "MarkdownV2".into(),
-                    )
-                    .await?;
+                    tg_client
+                        .send_message_async(
+                            message.chat.id,
+                            result,
+                            "MarkdownV2".into(),
+                        )
+                        .await?;
+                }
             }
 
             reqwest::StatusCode::OK
