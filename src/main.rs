@@ -12,38 +12,33 @@ async fn function_handler(
     event: Request,
     gtp_client: &GtpClient,
     tg_client: &TgClient,
-    tg_bot_name: &String,
+    tg_bot_names: &Vec<&str>,
 ) -> Result<Response<Body>, Error> {
     let update: Option<Update> = event.payload().map_err(|error| {
-        let empty: String = String::new();
-        let body: &String = match event.body() {
-            Empty => &empty,
-            Body::Text(text) => text,
-            Body::Binary(_) => &empty,
-        };
+        let body = get_response_body(event.body());
         Error::from(format!("Bad payload. Error {error}. Body {body}"))
     })?;
 
     let status_code = match update.and_then(|x| x.message) {
         None => {
-            let empty: String = String::new();
-            let body: &String = match event.body() {
-                Empty => &empty,
-                Body::Text(text) => text,
-                Body::Binary(_) => &empty,
-            };
-
+            let body = get_response_body(event.body());
             eprint!("Bad payload. Body {body}");
             reqwest::StatusCode::OK
         }
         Some(message) => {
             if let Some(text) = message.text {
-                if text.contains(tg_bot_name)
+                let used_name =
+                    tg_bot_names.iter().find(|&&name| text.starts_with(name));
+
+                if used_name.is_some()
                     || message
                         .reply_to_message
                         .is_some_and(|reply| reply.from.is_bot)
                 {
-                    let text = text.replace(tg_bot_name, "");
+                    let text = used_name
+                        .map(|name| text.replace(name, ""))
+                        .unwrap_or(text);
+
                     let result = gtp_client.get_completion(text).await?;
 
                     tg_client
@@ -64,6 +59,16 @@ async fn function_handler(
     Ok(resp)
 }
 
+#[inline]
+fn get_response_body(body: &Body) -> &str {
+    const EMPTY: &str = "";
+    match body {
+        Empty => EMPTY,
+        Body::Text(text) => text,
+        Body::Binary(_) => EMPTY,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -74,7 +79,9 @@ async fn main() -> Result<(), Error> {
         .without_time()
         .init();
 
-    let tg_bot_name = std::env::var("BOT_NAME")?;
+    let tg_bot_names = std::env::var("BOT_ALIAS")?;
+    let tg_bot_names = tg_bot_names.split(',').collect();
+
     let tg_token = std::env::var("TOKEN")?;
     let gpt_token = std::env::var("GPT_TOKEN")?;
     let gpt_model = std::env::var("GPT_MODEL")?;
@@ -83,7 +90,7 @@ async fn main() -> Result<(), Error> {
     let gtp_client = GtpClient::new(gpt_model, gpt_token);
 
     run(service_fn(|event| {
-        function_handler(event, &gtp_client, &tg_client, &tg_bot_name)
+        function_handler(event, &gtp_client, &tg_client, &tg_bot_names)
     }))
     .await
 }

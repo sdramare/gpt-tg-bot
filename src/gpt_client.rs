@@ -1,13 +1,7 @@
-use derive_more::{Constructor, Display, Error};
+use derive_more::Constructor;
 use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 use std::sync::Arc;
-
-#[derive(Error, Display, Debug, Constructor)]
-pub struct GtpError {
-    response: String,
-}
 
 #[derive(Debug, Serialize, Constructor)]
 pub struct Request<'a> {
@@ -78,7 +72,7 @@ impl GtpClient {
     pub async fn get_completion(
         &self,
         prompt: String,
-    ) -> Result<Arc<String>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Arc<String>, Box<dyn std::error::Error + Send + Sync>> {
         let message = Message::new("user", prompt.into());
         let messages = {
             let mut messages = self.messages.lock().await;
@@ -110,8 +104,7 @@ impl GtpClient {
 
             Ok(result)
         } else {
-            let error = response.text().await?;
-            Err(GtpError::new(error).into())
+            Err(response.text().await?.into())
         }
     }
 }
