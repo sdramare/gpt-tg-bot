@@ -40,12 +40,18 @@ async fn function_handler(
             reqwest::StatusCode::OK
         }
         Some(message) => {
-            let text = message.0.replace(tg_bot_name, "");
-            let result = gtp_client.get_completion(text).await?;
+            if message.0.contains(tg_bot_name) {
+                let text = message.0.replace(tg_bot_name, "");
+                let result = gtp_client.get_completion(text).await?;
 
-            tg_client
-                .send_message_async(message.1.id, result, "MarkdownV2".into())
-                .await?;
+                tg_client
+                    .send_message_async(
+                        message.1.id,
+                        result,
+                        "MarkdownV2".into(),
+                    )
+                    .await?;
+            }
 
             reqwest::StatusCode::OK
         }
@@ -69,10 +75,6 @@ async fn main() -> Result<(), Error> {
     let tg_token = std::env::var("TOKEN")?;
     let gpt_token = std::env::var("GPT_TOKEN")?;
     let gpt_model = std::env::var("GPT_MODEL")?;
-
-    /*let tg_token: String = "aa".into();
-    let gpt_token: String = "bb".into();
-    let gpt_model: String = "cc".into();*/
 
     let tg_client = TgClient::new(tg_token);
     let gtp_client = GtpClient::new(gpt_model, gpt_token);
