@@ -4,20 +4,20 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Debug, Serialize, Constructor)]
-pub struct Request<'a> {
+struct Request<'a> {
     model: &'a str,
     messages: &'a Vec<Message>,
     temperature: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Constructor, Clone)]
-pub struct Message {
+struct Message {
     role: &'static str,
     content: Arc<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Response {
+struct Response {
     id: String,
     object: String,
     created: i64,
@@ -27,20 +27,20 @@ pub struct Response {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Choice {
+struct Choice {
     index: i32,
     message: ResponseMessage,
     finish_reason: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ResponseMessage {
+struct ResponseMessage {
     role: String,
     content: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Usage {
+struct Usage {
     prompt_tokens: i32,
     completion_tokens: i32,
     total_tokens: i32,
