@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Update {
     pub(crate) update_id: i64,
-    pub(crate) message: Message,
+    pub(crate) message: Option<Message>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,7 +16,7 @@ pub struct Message {
     pub(crate) from: User,
     pub(crate) chat: Chat,
     pub(crate) date: i64,
-    pub(crate) text: String,
+    pub(crate) text: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,13 +28,13 @@ pub struct User {
     // Because some users might not have a last name
     pub(crate) username: Option<String>,
     // Username is also not always present
-    pub(crate) language_code: String,
+    pub(crate) language_code: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Chat {
     pub(crate) id: i64,
-    pub(crate) first_name: String,
+    pub(crate) first_name: Option<String>,
     pub(crate) last_name: Option<String>,
     // Because some chats might not have a last name
     pub(crate) username: Option<String>,

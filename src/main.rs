@@ -12,20 +12,39 @@ async fn function_handler(
     event: Request,
     gtp_client: &GtpClient,
     tg_client: &TgClient,
+    tg_bot_name: &String,
 ) -> Result<Response<Body>, Error> {
-    let update: Option<Update> = event.payload()?;
+    let update: Option<Update> = event.payload().map_err(|error| {
+        let empty: String = String::new();
+        let body: &String = match event.body() {
+            Empty => &empty,
+            Body::Text(text) => text,
+            Body::Binary(_) => &empty,
+        };
+        Error::from(format!("Bad payload. Error {error}. Body {body}"))
+    })?;
 
-    let status_code = match update {
-        None => reqwest::StatusCode::BAD_REQUEST,
-        Some(update) => {
-            let result = gtp_client.get_completion(update.message.text).await?;
+    let status_code = match update
+        .and_then(|x| x.message)
+        .and_then(|message| message.text.map(|text| (text, message.chat)))
+    {
+        None => {
+            let empty: String = String::new();
+            let body: &String = match event.body() {
+                Empty => &empty,
+                Body::Text(text) => text,
+                Body::Binary(_) => &empty,
+            };
+
+            eprint!("Bad payload. Body {body}");
+            reqwest::StatusCode::OK
+        }
+        Some(message) => {
+            let text = message.0.replace(tg_bot_name, "");
+            let result = gtp_client.get_completion(text).await?;
 
             tg_client
-                .send_message_async(
-                    update.message.chat.id,
-                    result,
-                    "MarkdownV2".into(),
-                )
+                .send_message_async(message.1.id, result, "MarkdownV2".into())
                 .await?;
 
             reqwest::StatusCode::OK
@@ -46,15 +65,20 @@ async fn main() -> Result<(), Error> {
         .without_time()
         .init();
 
+    let tg_bot_name = std::env::var("BOT_NAME")?;
     let tg_token = std::env::var("TOKEN")?;
     let gpt_token = std::env::var("GPT_TOKEN")?;
     let gpt_model = std::env::var("GPT_MODEL")?;
+
+    /*let tg_token: String = "aa".into();
+    let gpt_token: String = "bb".into();
+    let gpt_model: String = "cc".into();*/
 
     let tg_client = TgClient::new(tg_token);
     let gtp_client = GtpClient::new(gpt_model, gpt_token);
 
     run(service_fn(|event| {
-        function_handler(event, &gtp_client, &tg_client)
+        function_handler(event, &gtp_client, &tg_client, &tg_bot_name)
     }))
     .await
 }
