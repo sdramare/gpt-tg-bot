@@ -2,7 +2,7 @@ mod gpt_client;
 mod tg_client;
 
 use crate::gpt_client::GtpClient;
-use crate::tg_client::{Message, TgClient, Update};
+use crate::tg_client::{Chat, Message, TgClient, Update, PRIVATE_CHAT};
 use lambda_http::Body::Empty;
 use lambda_http::{
     run, service_fn, Body, Error, Request, RequestPayloadExt, Response,
@@ -44,7 +44,7 @@ async fn process_message(
         let used_name =
             tg_bot_names.iter().find(|&&name| text.starts_with(name));
 
-        if should_answer(message.reply_to_message, used_name) {
+        if should_answer(message.reply_to_message, &message.chat, used_name) {
             let text =
                 used_name.map(|name| text.replace(name, "")).unwrap_or(text);
 
@@ -64,9 +64,11 @@ async fn process_message(
 
 fn should_answer(
     reply_to_message: Option<Box<Message>>,
+    chat: &Chat,
     used_name: Option<&&str>,
 ) -> bool {
-    used_name.is_some()
+    chat.chat_type == PRIVATE_CHAT
+        || used_name.is_some()
         || reply_to_message.is_some_and(|reply| reply.from.is_bot)
 }
 

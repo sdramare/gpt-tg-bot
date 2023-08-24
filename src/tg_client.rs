@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 
+pub const PRIVATE_CHAT: &str = "private";
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Update {
     pub(crate) update_id: i64,
