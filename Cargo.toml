@@ -15,15 +15,15 @@ edition = "2021"
 # and it will keep the alphabetic ordering for you.
 
 [dependencies]
-lambda_http = "0.8.1"
-lambda_runtime = "0.8.1"
+lambda_http = "0.8"
+lambda_runtime = "0.8"
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-derive_more = "0.99.17"
-futures = "0.3.28"
-rustls-webpki = "0.101.4"
+derive_more = "0.99"
+futures = "0.3"
+rustls-webpki = "0.101"
 

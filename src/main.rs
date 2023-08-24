@@ -82,11 +82,9 @@ fn get_update(event: &Request) -> Result<Option<Update>, Error> {
 
 #[inline]
 fn get_response_body(body: &Body) -> &str {
-    const EMPTY: &str = "";
     match body {
-        Empty => EMPTY,
         Body::Text(text) => text,
-        Body::Binary(_) => EMPTY,
+        _ => Default::default(),
     }
 }
 
