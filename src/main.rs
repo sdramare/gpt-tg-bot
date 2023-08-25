@@ -18,7 +18,7 @@ async fn function_handler(
 
     match update.and_then(|x| x.message) {
         None => {
-            let body = get_response_body(event.body());
+            let body = get_request_body(event.body());
             eprint!("Bad payload. Body {body}");
         }
         Some(message) => {
@@ -45,8 +45,11 @@ async fn process_message(
             tg_bot_names.iter().find(|&&name| text.starts_with(name));
 
         if should_answer(message.reply_to_message, &message.chat, used_name) {
-            let text =
+            let mut text =
                 used_name.map(|name| text.replace(name, "")).unwrap_or(text);
+
+            let first_name = message.from.first_name;
+            text.push_str(&format!(" .Обращайся ко мне на \"ты\" и по имени \"{first_name}\" в уменьшительной форме."));
 
             let result = gtp_client.get_completion(text).await?;
 
@@ -74,14 +77,14 @@ fn should_answer(
 
 fn get_update(event: &Request) -> Result<Option<Update>, Error> {
     let update: Option<Update> = event.payload().map_err(|error| {
-        let body = get_response_body(event.body());
+        let body = get_request_body(event.body());
         Error::from(format!("Bad payload. Error {error}. Body {body}"))
     })?;
     Ok(update)
 }
 
 #[inline]
-fn get_response_body(body: &Body) -> &str {
+fn get_request_body(body: &Body) -> &str {
     match body {
         Body::Text(text) => text,
         _ => Default::default(),
