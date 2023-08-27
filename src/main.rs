@@ -104,12 +104,15 @@ async fn main() -> Result<(), Error> {
     let tg_bot_names = std::env::var("BOT_ALIAS")?;
     let tg_bot_names = tg_bot_names.split(',').collect();
 
-    let tg_token = std::env::var("TOKEN")?;
+    let tg_token = std::env::var("TG_TOKEN")?;
     let gpt_token = std::env::var("GPT_TOKEN")?;
     let gpt_model = std::env::var("GPT_MODEL")?;
+    let base_rules = std::env::var("GPT_RULES")?;
 
     let tg_client = TgClient::new(tg_token);
     let gtp_client = GtpClient::new(gpt_model, gpt_token);
+
+    gtp_client.get_completion(base_rules).await?;
 
     run(service_fn(|event| {
         function_handler(event, &gtp_client, &tg_client, &tg_bot_names)
