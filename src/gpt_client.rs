@@ -3,6 +3,8 @@ use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use anyhow::{bail, Result};
+
 #[derive(Debug, Serialize, Constructor)]
 struct Request<'a> {
     model: &'a str,
@@ -69,10 +71,7 @@ impl GtpClient {
         }
     }
 
-    pub async fn get_completion(
-        &self,
-        prompt: String,
-    ) -> Result<Arc<String>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_completion(&self, prompt: String) -> Result<Arc<String>> {
         let message = Message::new("user", prompt.into());
         let messages = {
             let mut messages = self.messages.lock().await;
@@ -104,7 +103,7 @@ impl GtpClient {
 
             Ok(result)
         } else {
-            Err(response.text().await?.into())
+            bail!(response.text().await?)
         }
     }
 }

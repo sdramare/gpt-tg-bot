@@ -1,7 +1,9 @@
+use anyhow::{bail, Result};
+use chrono::naive::serde::ts_seconds::deserialize as from_ts;
+use chrono::{NaiveDateTime};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::error::Error;
 use std::sync::Arc;
 
 pub const PRIVATE_CHAT: &str = "private";
@@ -17,7 +19,8 @@ pub struct Message {
     pub(crate) message_id: i32,
     pub(crate) from: User,
     pub(crate) chat: Chat,
-    pub(crate) date: i64,
+    #[serde(deserialize_with = "from_ts")]
+    pub(crate) date: NaiveDateTime,
     pub(crate) text: Option<String>,
     pub(crate) reply_to_message: Option<Box<Message>>,
 }
@@ -96,7 +99,7 @@ impl TgClient {
         chat_id: i64,
         text: Arc<String>,
         parse_mode: Option<&'static str>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<()> {
         let mut result_text = String::with_capacity(text.capacity());
 
         for ch in text.chars() {
@@ -118,7 +121,7 @@ impl TgClient {
             .await?;
 
         if !response.status().is_success() {
-            eprintln!("{:?}", response.text().await?);
+            bail!(response.text().await?);
         }
 
         Ok(())

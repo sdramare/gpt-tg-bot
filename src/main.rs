@@ -3,28 +3,24 @@ mod tg_client;
 
 use crate::gpt_client::GtpClient;
 use crate::tg_client::{Chat, Message, TgClient, Update, PRIVATE_CHAT};
+use anyhow::{anyhow, bail, Result};
+use chrono::{Duration, Utc};
 use lambda_http::Body::Empty;
 use lambda_http::{
     run, service_fn, Body, Error, Request, RequestPayloadExt, Response,
 };
+use tracing::{error, warn};
 
 async fn function_handler(
     event: Request,
     gtp_client: &GtpClient,
     tg_client: &TgClient,
     tg_bot_names: &Vec<&str>,
-) -> Result<Response<Body>, Error> {
-    let update = get_update(&event)?;
-
-    match update.and_then(|x| x.message) {
-        None => {
-            let body = get_request_body(event.body());
-            eprint!("Bad payload. Body {body}");
-        }
-        Some(message) => {
-            process_message(gtp_client, tg_client, tg_bot_names, message)
-                .await?;
-        }
+) -> Result<Response<Body>> {
+    if let Err(error) =
+        process_event(&event, gtp_client, tg_client, tg_bot_names).await
+    {
+        error!("error: {error}")
     };
 
     let resp = Response::builder()
@@ -33,13 +29,41 @@ async fn function_handler(
     Ok(resp)
 }
 
+async fn process_event(
+    event: &Request,
+    gtp_client: &GtpClient,
+    tg_client: &TgClient,
+    tg_bot_names: &Vec<&str>,
+) -> Result<()> {
+    let update = get_update(&event)?;
+
+    match update.and_then(|x| x.message) {
+        None => {
+            let body = get_request_body(event.body());
+            bail!("Bad payload. Body {body}");
+        }
+        Some(message) => {
+            let utc = Utc::now().naive_utc();
+            if message.date < (utc - Duration::minutes(10)) {
+                warn!("Too old message - {}", message.date);
+                return Ok(());
+            }
+
+            process_message(gtp_client, tg_client, tg_bot_names, message)
+                .await?;
+        }
+    };
+
+    Ok(())
+}
+
 #[inline]
 async fn process_message(
     gtp_client: &GtpClient,
     tg_client: &TgClient,
     tg_bot_names: &Vec<&str>,
     message: Message,
-) -> Result<(), Error> {
+) -> Result<()> {
     if let Some(text) = message.text {
         let used_name =
             tg_bot_names.iter().find(|&&name| text.starts_with(name));
@@ -75,11 +99,12 @@ fn should_answer(
         || reply_to_message.is_some_and(|reply| reply.from.is_bot)
 }
 
-fn get_update(event: &Request) -> Result<Option<Update>, Error> {
+fn get_update(event: &Request) -> Result<Option<Update>> {
     let update: Option<Update> = event.payload().map_err(|error| {
         let body = get_request_body(event.body());
-        Error::from(format!("Bad payload. Error {error}. Body {body}"))
+        anyhow!("Bad payload. Error {error}. Body {body}")
     })?;
+
     Ok(update)
 }
 
