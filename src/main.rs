@@ -162,9 +162,7 @@ async fn main() -> Result<(), Error> {
     let base_rules = std::env::var("GPT_RULES")?;
 
     let tg_client = TgClient::new(tg_token);
-    let gtp_client = GtpClient::new(gpt_model, gpt_token);
-
-    gtp_client.get_completion(base_rules).await?;
+    let gtp_client = GtpClient::new(gpt_model, gpt_token, base_rules);
 
     run(service_fn(|event| {
         function_handler(event, &gtp_client, &tg_client, &tg_bot_names)

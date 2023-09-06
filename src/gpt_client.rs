@@ -58,7 +58,7 @@ pub struct GtpClient {
 }
 
 impl GtpClient {
-    pub fn new(model: String, token: String) -> Self {
+    pub fn new(model: String, token: String, base_rules: String) -> Self {
         let url = "https://api.openai.com/v1/chat/completions";
         let http_client = reqwest::Client::new();
 
@@ -67,7 +67,7 @@ impl GtpClient {
             model,
             http_client,
             url,
-            messages: Mutex::new(Vec::new()),
+            messages: Mutex::new(vec![Message::new("user", base_rules.into())]),
         }
     }
 
