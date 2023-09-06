@@ -4,7 +4,6 @@ use chrono::NaiveDateTime;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::Arc;
 
 pub const PRIVATE_CHAT: &str = "private";
 
@@ -97,7 +96,7 @@ impl TgClient {
     pub async fn send_message_async(
         &self,
         chat_id: i64,
-        text: Arc<String>,
+        text: &str,
         parse_mode: Option<&'static str>,
     ) -> Result<()> {
         let mut result_text = String::with_capacity(text.len());

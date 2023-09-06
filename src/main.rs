@@ -10,7 +10,6 @@ use lambda_http::{
     run, service_fn, Body, Error, Request, RequestPayloadExt, Response,
 };
 use rand::Rng;
-use std::sync::Arc;
 use tracing::{error, warn};
 
 async fn function_handler(
@@ -59,7 +58,6 @@ async fn process_event(
     Ok(())
 }
 
-#[inline]
 async fn process_message(
     gtp_client: &GtpClient,
     tg_client: &TgClient,
@@ -70,26 +68,9 @@ async fn process_message(
         if text.contains("https://youtu")
             || text.contains("https://www.youtube")
         {
-            let num = rand::thread_rng().gen_range(0..100);
-            if num < 30 {
-                let num = rand::thread_rng().gen_range(0..3);
-                let answer = match num {
-                    0 => "боян",
-                    1 => "прикол",
-                    2 => "ну такое",
-                    3 => "хуйня какая-то",
-                    _ => "хуйня какая-то",
-                };
-                tg_client
-                    .send_message_async(
-                        message.chat.id,
-                        Arc::from(answer.to_string()),
-                        "MarkdownV2".into(),
-                    )
-                    .await?;
+            dump_reaction(tg_client, message.chat.id).await?;
 
-                return Ok(());
-            }
+            return Ok(());
         }
 
         let used_name =
@@ -107,11 +88,28 @@ async fn process_message(
             tg_client
                 .send_message_async(
                     message.chat.id,
-                    result,
+                    result.as_str(),
                     "MarkdownV2".into(),
                 )
                 .await?;
         }
+    }
+    Ok(())
+}
+
+async fn dump_reaction(tg_client: &TgClient, chat_id: i64) -> Result<()> {
+    let num = rand::thread_rng().gen_range(0..100);
+    if num < 30 {
+        let num = rand::thread_rng().gen_range(0..5);
+        let answer = match num {
+            0 => "боян",
+            1 => "прикол",
+            2 => "ну такое",
+            _ => "хуйня какая-то",
+        };
+        tg_client
+            .send_message_async(chat_id, answer, "MarkdownV2".into())
+            .await?;
     }
     Ok(())
 }
