@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use chrono::naive::serde::ts_seconds::deserialize as from_ts;
-use chrono::{NaiveDateTime};
+use chrono::NaiveDateTime;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -100,7 +100,7 @@ impl TgClient {
         text: Arc<String>,
         parse_mode: Option<&'static str>,
     ) -> Result<()> {
-        let mut result_text = String::with_capacity(text.capacity());
+        let mut result_text = String::with_capacity(text.len());
 
         for ch in text.chars() {
             if self.escape_symbols.contains(&ch) {

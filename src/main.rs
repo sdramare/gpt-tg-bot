@@ -9,6 +9,8 @@ use lambda_http::Body::Empty;
 use lambda_http::{
     run, service_fn, Body, Error, Request, RequestPayloadExt, Response,
 };
+use rand::Rng;
+use std::sync::Arc;
 use tracing::{error, warn};
 
 async fn function_handler(
@@ -65,6 +67,31 @@ async fn process_message(
     message: Message,
 ) -> Result<()> {
     if let Some(text) = message.text {
+        if text.contains("https://youtu")
+            || text.contains("https://www.youtube")
+        {
+            let num = rand::thread_rng().gen_range(0..100);
+            if num < 30 {
+                let num = rand::thread_rng().gen_range(0..3);
+                let answer = match num {
+                    0 => "боян",
+                    1 => "прикол",
+                    2 => "ну такое",
+                    3 => "хуйня какая-то",
+                    _ => "хуйня какая-то",
+                };
+                tg_client
+                    .send_message_async(
+                        message.chat.id,
+                        Arc::from(answer.to_string()),
+                        "MarkdownV2".into(),
+                    )
+                    .await?;
+
+                return Ok(());
+            }
+        }
+
         let used_name =
             tg_bot_names.iter().find(|&&name| text.starts_with(name));
 
