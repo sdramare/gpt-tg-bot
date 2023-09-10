@@ -17,11 +17,18 @@ async fn function_handler(
     gtp_client: &GtpClient,
     tg_client: &TgClient,
     tg_bot_names: &Vec<&str>,
+    tg_bot_allow_chats: &Vec<i64>,
 ) -> Result<Response<Body>> {
-    if let Err(error) =
-        process_event(&event, gtp_client, tg_client, tg_bot_names).await
+    if let Err(error) = process_event(
+        &event,
+        gtp_client,
+        tg_client,
+        tg_bot_names,
+        tg_bot_allow_chats,
+    )
+    .await
     {
-        error!("error: {error}")
+        error!("{error}")
     };
 
     let resp = Response::builder()
@@ -35,6 +42,7 @@ async fn process_event(
     gtp_client: &GtpClient,
     tg_client: &TgClient,
     tg_bot_names: &Vec<&str>,
+    tg_bot_allow_chats: &Vec<i64>,
 ) -> Result<()> {
     let update = get_update(&event)?;
 
@@ -50,8 +58,14 @@ async fn process_event(
                 return Ok(());
             }
 
-            process_message(gtp_client, tg_client, tg_bot_names, message)
-                .await?;
+            process_message(
+                gtp_client,
+                tg_client,
+                tg_bot_names,
+                tg_bot_allow_chats,
+                message,
+            )
+            .await?;
         }
     };
 
@@ -62,12 +76,11 @@ async fn process_message(
     gtp_client: &GtpClient,
     tg_client: &TgClient,
     tg_bot_names: &Vec<&str>,
+    tg_bot_allow_chats: &Vec<i64>,
     message: Message,
 ) -> Result<()> {
     if let Some(text) = message.text {
-        if text.contains("https://youtu")
-            || text.contains("https://www.youtube")
-        {
+        if text.contains("https://") {
             dump_reaction(tg_client, message.chat.id).await?;
 
             return Ok(());
@@ -76,12 +89,17 @@ async fn process_message(
         let used_name =
             tg_bot_names.iter().find(|&&name| text.starts_with(name));
 
-        if should_answer(message.reply_to_message, &message.chat, used_name) {
+        if should_answer(
+            message.reply_to_message,
+            &message.chat,
+            used_name,
+            tg_bot_allow_chats,
+        ) {
             let mut text =
                 used_name.map(|name| text.replace(name, "")).unwrap_or(text);
 
             let first_name = message.from.first_name;
-            text.push_str(&format!(" .Обращайся ко мне на \"ты\" и по имени \"{first_name}\" в уменьшительной форме."));
+            text.push_str(&format!(" .Обращайся ко мне на \"ты\" и по имени \"{first_name}\" в уменьшительной форме, но только не Юрочка и Юрочек."));
 
             let result = gtp_client.get_completion(text).await?;
 
@@ -100,11 +118,12 @@ async fn process_message(
 async fn dump_reaction(tg_client: &TgClient, chat_id: i64) -> Result<()> {
     let num = rand::thread_rng().gen_range(0..100);
     if num < 30 {
-        let num = rand::thread_rng().gen_range(0..5);
+        let num = rand::thread_rng().gen_range(0..6);
         let answer = match num {
             0 => "боян",
             1 => "прикол",
             2 => "ну такое",
+            3 => "было уже",
             _ => "хуйня какая-то",
         };
         tg_client
@@ -118,10 +137,12 @@ fn should_answer(
     reply_to_message: Option<Box<Message>>,
     chat: &Chat,
     used_name: Option<&&str>,
+    tg_bot_allow_chats: &Vec<i64>,
 ) -> bool {
-    chat.chat_type == PRIVATE_CHAT
-        || used_name.is_some()
-        || reply_to_message.is_some_and(|reply| reply.from.is_bot)
+    (tg_bot_allow_chats.contains(&chat.id))
+        && (chat.chat_type == PRIVATE_CHAT
+            || used_name.is_some()
+            || reply_to_message.is_some_and(|reply| reply.from.is_bot))
 }
 
 fn get_update(event: &Request) -> Result<Option<Update>> {
@@ -158,12 +179,23 @@ async fn main() -> Result<(), Error> {
     let gpt_token = std::env::var("GPT_TOKEN")?;
     let gpt_model = std::env::var("GPT_MODEL")?;
     let base_rules = std::env::var("GPT_RULES")?;
+    let mut tg_bot_allow_chats = Vec::new();
+
+    for chat_id in std::env::var("TG_ALLOW_CHATS")?.split(',') {
+        tg_bot_allow_chats.push(chat_id.parse::<i64>()?);
+    }
 
     let tg_client = TgClient::new(tg_token);
     let gtp_client = GtpClient::new(gpt_model, gpt_token, base_rules);
 
     run(service_fn(|event| {
-        function_handler(event, &gtp_client, &tg_client, &tg_bot_names)
+        function_handler(
+            event,
+            &gtp_client,
+            &tg_client,
+            &tg_bot_names,
+            &tg_bot_allow_chats,
+        )
     }))
     .await
 }
