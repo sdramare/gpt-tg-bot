@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub const PRIVATE_CHAT: &str = "private";
 
 static ESCAPE_SYMBOLS: phf::Set<char> = phf::phf_set! {
-    '_', '*', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|',
+    '_', '*', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|','\\',
     '{', '}', '.', '!',
 };
 
@@ -115,7 +115,12 @@ impl TgClient {
             .await?;
 
         if !response.status().is_success() {
-            bail!(response.text().await?);
+            let error = format!(
+                "Telegram send error. Error: {}. Request {}",
+                response.text().await?,
+                request_data.text
+            );
+            bail!(error);
         }
 
         Ok(())
