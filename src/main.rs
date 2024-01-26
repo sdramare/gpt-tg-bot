@@ -7,7 +7,7 @@ use anyhow::{anyhow, bail, Result};
 use chrono::{Duration, Utc};
 use lambda_http::Body::Empty;
 use lambda_http::{
-    run, service_fn, Body, Error, Request, RequestPayloadExt, Response,
+    http, run, service_fn, Body, Error, Request, RequestPayloadExt, Response,
 };
 use rand::Rng;
 use tracing::{error, warn};
@@ -32,7 +32,7 @@ async fn function_handler(
     };
 
     let resp = Response::builder()
-        .status(reqwest::StatusCode::OK)
+        .status(http::StatusCode::OK)
         .body(Empty)?;
     Ok(resp)
 }
