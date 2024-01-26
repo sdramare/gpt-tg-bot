@@ -3,9 +3,13 @@ use chrono::naive::serde::ts_seconds::deserialize as from_ts;
 use chrono::NaiveDateTime;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 pub const PRIVATE_CHAT: &str = "private";
+
+static ESCAPE_SYMBOLS: phf::Set<char> = phf::phf_set! {
+    '_', '*', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|',
+    '{', '}', '.', '!',
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Update {
@@ -52,7 +56,6 @@ pub struct Chat {
 pub struct TgClient {
     http_client: reqwest::Client,
     url: String,
-    escape_symbols: HashSet<char>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -79,18 +82,10 @@ impl TgMessageRequest {
 
 impl TgClient {
     pub fn new(token: String) -> Self {
-        let escape_symbols = HashSet::from([
-            '_', '*', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|',
-            '{', '}', '.', '!',
-        ]);
         let url = format!("https://api.telegram.org/bot{token}/sendMessage");
         let http_client = reqwest::Client::new();
 
-        TgClient {
-            http_client,
-            url,
-            escape_symbols,
-        }
+        TgClient { http_client, url }
     }
 
     pub async fn send_message_async(
@@ -102,7 +97,7 @@ impl TgClient {
         let mut result_text = String::with_capacity(text.len());
 
         for ch in text.chars() {
-            if self.escape_symbols.contains(&ch) {
+            if ESCAPE_SYMBOLS.contains(&ch) {
                 result_text.push('\\');
             }
 

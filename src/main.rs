@@ -99,7 +99,9 @@ async fn process_message(
                 used_name.map(|name| text.replace(name, "")).unwrap_or(text);
 
             let first_name = message.from.first_name;
-            text.push_str(&format!(" .Обращайся ко мне на \"ты\" и по имени \"{first_name}\" в уменьшительной форме, но только не Юрочка и Юрочек."));
+            let mut prepend = format!("Обращайся ко мне на \"ты\" и по имени \"{first_name}\" в уменьшительной форме, но только не Юрочка и Юрочек. ");
+            prepend.push_str(&text);
+            text = prepend;
 
             let result = gtp_client.get_completion(text).await?;
 

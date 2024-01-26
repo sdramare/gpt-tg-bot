@@ -29,4 +29,5 @@ rustls-webpki = "0.101"
 anyhow = "1.0.75"
 chrono = { version = "0.4.28", features = ["serde"] }
 rand = "0.8.5"
+phf = { version = "0.11.2", features = ["macros"] }
 
