@@ -88,7 +88,7 @@ impl TgClient {
         TgClient { http_client, url }
     }
 
-    pub async fn send_message_async(
+    pub async fn send_message(
         &self,
         chat_id: i64,
         text: &str,

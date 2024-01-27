@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 mod gpt_client;
 mod tg_client;
 
@@ -106,7 +108,7 @@ async fn process_message(
             let result = gtp_client.get_completion(text).await?;
 
             tg_client
-                .send_message_async(
+                .send_message(
                     message.chat.id,
                     result.as_str(),
                     "MarkdownV2".into(),
@@ -129,7 +131,7 @@ async fn dump_reaction(tg_client: &TgClient, chat_id: i64) -> Result<()> {
             _ => "хуйня какая-то",
         };
         tg_client
-            .send_message_async(chat_id, answer, "MarkdownV2".into())
+            .send_message(chat_id, answer, "MarkdownV2".into())
             .await?;
     }
     Ok(())
