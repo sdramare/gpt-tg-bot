@@ -20,7 +20,7 @@ use tracing::{error, warn};
 struct TgBot {
     gtp_client: GtpClient,
     tg_client: TgClient,
-    tg_bot_names: Vec<String>,
+    tg_bot_names: Vec<&'static str>,
     tg_bot_allow_chats: Vec<i64>,
     preamble: String,
 }
@@ -72,8 +72,8 @@ async fn process_message(tg_bot: &TgBot, message: Message) -> Result<()> {
         let used_name = tg_bot
             .tg_bot_names
             .iter()
-            .map(String::as_str)
-            .find(|name| text.starts_with(name));
+            .map(|&name| name)
+            .find(|&name| text.starts_with(name));
 
         if should_answer(
             message.reply_to_message,
@@ -161,9 +161,7 @@ async fn main() -> Result<(), Error> {
         .without_time()
         .init();
 
-    let tg_bot_names = std::env::var("BOT_ALIAS")?;
-    let tg_bot_names: Vec<String> =
-        tg_bot_names.split(',').map(String::from).collect();
+    let tg_bot_names = std::env::var("BOT_ALIAS")?.leak().split(',').collect();
 
     let tg_token = std::env::var("TG_TOKEN")?;
     let gpt_token = std::env::var("GPT_TOKEN")?;

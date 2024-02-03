@@ -80,7 +80,7 @@ impl GtpClient {
             messages.clone()
         };
 
-        let request_data = Request::new(&*self.model, &messages, 0.7);
+        let request_data = Request::new(self.model.as_str(), &messages, 0.7);
         let token = &self.token;
         let response = self
             .http_client
