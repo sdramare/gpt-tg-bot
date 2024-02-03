@@ -7,6 +7,8 @@ use crate::gpt_client::GtpClient;
 use crate::tg_client::{Chat, Message, TgClient, Update, PRIVATE_CHAT};
 use anyhow::{anyhow, bail, Result};
 use chrono::{Duration, Utc};
+use derive_more::Constructor;
+use dyn_fmt::AsStrFormatExt;
 use lambda_http::Body::Empty;
 use lambda_http::{
     http, run, service_fn, Body, Error, Request, RequestPayloadExt, Response,
@@ -14,22 +16,20 @@ use lambda_http::{
 use rand::Rng;
 use tracing::{error, warn};
 
+#[derive(Constructor)]
+struct TgBot {
+    gtp_client: GtpClient,
+    tg_client: TgClient,
+    tg_bot_names: Vec<String>,
+    tg_bot_allow_chats: Vec<i64>,
+    preamble: String,
+}
+
 async fn function_handler(
     event: Request,
-    gtp_client: &GtpClient,
-    tg_client: &TgClient,
-    tg_bot_names: &Vec<&str>,
-    tg_bot_allow_chats: &Vec<i64>,
+    tg_bot: &TgBot,
 ) -> Result<Response<Body>> {
-    if let Err(error) = process_event(
-        &event,
-        gtp_client,
-        tg_client,
-        tg_bot_names,
-        tg_bot_allow_chats,
-    )
-    .await
-    {
+    if let Err(error) = process_event(&event, tg_bot).await {
         error!("{error}")
     };
 
@@ -39,13 +39,7 @@ async fn function_handler(
     Ok(resp)
 }
 
-async fn process_event(
-    event: &Request,
-    gtp_client: &GtpClient,
-    tg_client: &TgClient,
-    tg_bot_names: &Vec<&str>,
-    tg_bot_allow_chats: &Vec<i64>,
-) -> Result<()> {
+async fn process_event(event: &Request, tg_bot: &TgBot) -> Result<()> {
     let update = get_update(&event)?;
 
     match update.and_then(|x| x.message) {
@@ -60,54 +54,45 @@ async fn process_event(
                 return Ok(());
             }
 
-            process_message(
-                gtp_client,
-                tg_client,
-                tg_bot_names,
-                tg_bot_allow_chats,
-                message,
-            )
-            .await?;
+            process_message(tg_bot, message).await?;
         }
     };
 
     Ok(())
 }
 
-async fn process_message(
-    gtp_client: &GtpClient,
-    tg_client: &TgClient,
-    tg_bot_names: &Vec<&str>,
-    tg_bot_allow_chats: &Vec<i64>,
-    message: Message,
-) -> Result<()> {
+async fn process_message(tg_bot: &TgBot, message: Message) -> Result<()> {
     if let Some(text) = message.text {
         if text.contains("https://") {
-            dump_reaction(tg_client, message.chat.id).await?;
+            dummy_reaction(&tg_bot.tg_client, message.chat.id).await?;
 
             return Ok(());
         }
 
-        let used_name =
-            tg_bot_names.iter().find(|&&name| text.starts_with(name));
+        let used_name = tg_bot
+            .tg_bot_names
+            .iter()
+            .map(String::as_str)
+            .find(|name| text.starts_with(name));
 
         if should_answer(
             message.reply_to_message,
             &message.chat,
             used_name,
-            tg_bot_allow_chats,
+            &tg_bot.tg_bot_allow_chats,
         ) {
             let mut text =
                 used_name.map(|name| text.replace(name, "")).unwrap_or(text);
 
             let first_name = message.from.first_name;
-            let mut prepend = format!("Обращайся ко мне на \"ты\" и по имени \"{first_name}\" в уменьшительной форме, но только не Юрочка и Юрочек. ");
+            let mut prepend = tg_bot.preamble.format(&[first_name]);
             prepend.push_str(&text);
             text = prepend;
 
-            let result = gtp_client.get_completion(text).await?;
+            let result = tg_bot.gtp_client.get_completion(text).await?;
 
-            tg_client
+            tg_bot
+                .tg_client
                 .send_message(
                     message.chat.id,
                     result.as_str(),
@@ -119,7 +104,7 @@ async fn process_message(
     Ok(())
 }
 
-async fn dump_reaction(tg_client: &TgClient, chat_id: i64) -> Result<()> {
+async fn dummy_reaction(tg_client: &TgClient, chat_id: i64) -> Result<()> {
     let num = rand::thread_rng().gen_range(0..100);
     if num < 30 {
         let num = rand::thread_rng().gen_range(0..6);
@@ -140,7 +125,7 @@ async fn dump_reaction(tg_client: &TgClient, chat_id: i64) -> Result<()> {
 fn should_answer(
     reply_to_message: Option<Box<Message>>,
     chat: &Chat,
-    used_name: Option<&&str>,
+    used_name: Option<&str>,
     tg_bot_allow_chats: &Vec<i64>,
 ) -> bool {
     (tg_bot_allow_chats.contains(&chat.id))
@@ -177,12 +162,14 @@ async fn main() -> Result<(), Error> {
         .init();
 
     let tg_bot_names = std::env::var("BOT_ALIAS")?;
-    let tg_bot_names = tg_bot_names.split(',').collect();
+    let tg_bot_names: Vec<String> =
+        tg_bot_names.split(',').map(String::from).collect();
 
     let tg_token = std::env::var("TG_TOKEN")?;
     let gpt_token = std::env::var("GPT_TOKEN")?;
     let gpt_model = std::env::var("GPT_MODEL")?;
     let base_rules = std::env::var("GPT_RULES")?;
+    let gtp_preamble = std::env::var("GPT_PREAMBLE")?;
     let mut tg_bot_allow_chats = Vec::new();
 
     for chat_id in std::env::var("TG_ALLOW_CHATS")?.split(',') {
@@ -192,14 +179,13 @@ async fn main() -> Result<(), Error> {
     let tg_client = TgClient::new(tg_token);
     let gtp_client = GtpClient::new(gpt_model, gpt_token, base_rules);
 
-    run(service_fn(|event| {
-        function_handler(
-            event,
-            &gtp_client,
-            &tg_client,
-            &tg_bot_names,
-            &tg_bot_allow_chats,
-        )
-    }))
-    .await
+    let tg_bot = TgBot::new(
+        gtp_client,
+        tg_client,
+        tg_bot_names,
+        tg_bot_allow_chats,
+        gtp_preamble,
+    );
+
+    run(service_fn(|event| function_handler(event, &tg_bot))).await
 }

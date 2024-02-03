@@ -190,6 +190,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-fmt"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79ef34f092abc832595d6e7b81a416403243ab94cc4c8262608aa4fddc95209a"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -332,6 +338,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "derive_more",
+ "dyn-fmt",
  "futures",
  "lambda_http",
  "lambda_runtime",
