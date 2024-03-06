@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use chrono::naive::serde::ts_seconds::deserialize as from_ts;
 use chrono::NaiveDateTime;
+use derive_more::Constructor;
 use reqwest;
 use serde::{Deserialize, Serialize};
 
@@ -33,10 +34,10 @@ pub struct User {
     pub(crate) id: i64,
     pub(crate) is_bot: bool,
     pub(crate) first_name: String,
-    pub(crate) last_name: Option<String>,
     // Because some users might not have a last name
-    pub(crate) username: Option<String>,
+    pub(crate) last_name: Option<String>,
     // Username is also not always present
+    pub(crate) username: Option<String>,
     pub(crate) language_code: Option<String>,
 }
 
@@ -44,10 +45,10 @@ pub struct User {
 pub struct Chat {
     pub(crate) id: i64,
     pub(crate) first_name: Option<String>,
-    pub(crate) last_name: Option<String>,
     // Because some chats might not have a last name
-    pub(crate) username: Option<String>,
+    pub(crate) last_name: Option<String>,
     // Username is also not always present
+    pub(crate) username: Option<String>,
     #[serde(rename = "type")]
     pub(crate) chat_type: String,
 }
@@ -55,7 +56,8 @@ pub struct Chat {
 #[derive(Debug)]
 pub struct TgClient {
     http_client: reqwest::Client,
-    url: String,
+    send_message_url: String,
+    send_image_url: String,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -64,6 +66,12 @@ struct TgMessageRequest {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     parse_mode: Option<&'static str>,
+}
+
+#[derive(Debug, Constructor, Serialize)]
+struct TgMessageImageRequest {
+    chat_id: i64,
+    photo: String,
 }
 
 impl TgMessageRequest {
@@ -82,10 +90,14 @@ impl TgMessageRequest {
 
 impl TgClient {
     pub fn new(token: String) -> Self {
-        let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+        let url = format!("https://api.telegram.org/bot{token}");
         let http_client = reqwest::Client::new();
 
-        TgClient { http_client, url }
+        TgClient {
+            http_client,
+            send_message_url: format!("{}/sendMessage", url),
+            send_image_url: format!("{}/sendPhoto", url),
+        }
     }
 
     pub async fn send_message(
@@ -109,7 +121,7 @@ impl TgClient {
 
         let response = self
             .http_client
-            .post(&self.url)
+            .post(&self.send_message_url)
             .json(&request_data)
             .send()
             .await?;
@@ -119,6 +131,28 @@ impl TgClient {
                 "Telegram send error. Error: {}. Request {}",
                 response.text().await?,
                 request_data.text
+            );
+            bail!(error);
+        }
+
+        Ok(())
+    }
+
+    pub async fn send_image(&self, chat_id: i64, url: &str) -> Result<()> {
+        let request_data = TgMessageImageRequest::new(chat_id, url.to_string());
+
+        let response = self
+            .http_client
+            .post(&self.send_image_url)
+            .json(&request_data)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error = format!(
+                "Telegram send error. Error: {}. Request {}",
+                response.text().await?,
+                request_data.photo
             );
             bail!(error);
         }

@@ -53,8 +53,27 @@ pub struct GtpClient {
     token: String,
     model: String,
     http_client: reqwest::Client,
-    url: &'static str,
+    chat_url: &'static str,
+    dalle_url: &'static str,
     messages: Mutex<Vec<Message>>,
+}
+
+#[derive(Debug, Serialize, Constructor)]
+struct DalleRequest<'a> {
+    model: &'a str,
+    prompt: &'a str,
+    n: i32,
+    size: &'static str,
+}
+
+#[derive(Debug, Deserialize, Constructor)]
+struct DalleResponse {
+    data: Vec<DalleResponseData>,
+}
+
+#[derive(Debug, Deserialize, Constructor)]
+struct DalleResponseData {
+    url: String,
 }
 
 impl GtpClient {
@@ -66,7 +85,8 @@ impl GtpClient {
             token,
             model,
             http_client,
-            url,
+            chat_url: url,
+            dalle_url: "https://api.openai.com/v1/images/generations",
             messages: Mutex::new(vec![Message::new("user", base_rules.into())]),
         }
     }
@@ -84,7 +104,7 @@ impl GtpClient {
         let token = &self.token;
         let response = self
             .http_client
-            .post(self.url)
+            .post(self.chat_url)
             .header("Authorization", format!("Bearer {token}"))
             .json(&request_data)
             .send()
@@ -102,6 +122,29 @@ impl GtpClient {
             }
 
             Ok(result)
+        } else {
+            bail!(response.text().await?)
+        }
+    }
+
+    pub async fn get_image(&self, prompt: &str) -> Result<String> {
+        let dalle_request =
+            DalleRequest::new("dall-e-3", prompt, 1, "1024x1024");
+
+        let token = &self.token;
+        let response = self
+            .http_client
+            .post(self.dalle_url)
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&dalle_request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let mut completion = response.json::<DalleResponse>().await?;
+            let response = completion.data.remove(0);
+
+            Ok(response.url)
         } else {
             bail!(response.text().await?)
         }
