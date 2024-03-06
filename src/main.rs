@@ -3,6 +3,7 @@
 mod gpt_client;
 mod tg_client;
 
+use std::path::Path;
 use crate::gpt_client::GtpClient;
 use crate::tg_client::{Chat, Message, TgClient, Update, PRIVATE_CHAT};
 
@@ -269,9 +270,11 @@ async fn main() -> Result<(), Error> {
     );
 
     if cfg!(debug_assertions) {
-        let message_json = include_str!("../message.json");
+        let message_path = Path::new(env!("CARGO_MANIFEST_DIR"));
+        
+        let message_json = std::fs::read_to_string(message_path.join("message.json"))?;
 
-        let message: Message = serde_json::from_str(message_json)?;
+        let message: Message = serde_json::from_str(message_json.as_str())?;
 
         process_message(&tg_bot, message).await?;
     } else {
