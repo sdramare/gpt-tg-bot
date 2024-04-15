@@ -1,11 +1,6 @@
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 
-mod gpt_client;
-mod tg_client;
-
 use std::path::Path;
-use crate::gpt_client::GtpClient;
-use crate::tg_client::{Chat, Message, TgClient, Update, PRIVATE_CHAT};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{Duration, Utc};
@@ -20,13 +15,30 @@ use rand::Rng;
 use thiserror::Error;
 use tracing::{error, info, instrument, span, warn, Instrument, Span};
 
+use crate::gpt_client::GtpClient;
+use crate::tg_client::{Chat, Message, TgClient, Update, PRIVATE_CHAT};
+
+mod gpt_client;
+mod tg_client;
+
 #[derive(Constructor)]
 struct TgBot {
     gtp_client: GtpClient,
+    private_gtp_client: GtpClient,
     tg_client: TgClient,
     tg_bot_names: Vec<&'static str>,
     tg_bot_allow_chats: Vec<i64>,
     preamble: String,
+}
+
+impl TgBot {
+    fn gtp_client(&self, chat: &Chat) -> &GtpClient {
+        if chat.is_private() {
+            &self.private_gtp_client
+        } else {
+            &self.gtp_client
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -68,7 +80,7 @@ async fn function_handler(
 }
 
 async fn process_event(event: &Request, tg_bot: &TgBot) -> Result<()> {
-    let update = get_update(&event)?;
+    let update = get_update(event)?;
 
     match update.and_then(|x| x.message) {
         None => {
@@ -89,8 +101,56 @@ async fn process_event(event: &Request, tg_bot: &TgBot) -> Result<()> {
     Ok(())
 }
 
+async fn process_photo(tg_bot: &TgBot, message: Message) -> Result<()> {
+    let text = message.caption.unwrap_or("Что на картинке?".to_string());
+
+    let used_name = tg_bot
+        .tg_bot_names
+        .iter()
+        .copied()
+        .find(|&name| text.starts_with(name));
+
+    if should_answer(
+        message.reply_to_message,
+        &message.chat,
+        used_name,
+        &tg_bot.tg_bot_allow_chats,
+    ) {
+        let Some(photos) = message.photo else {
+            return Ok(());
+        };
+        let Some(photo) = photos.iter().max_by_key(|x| x.file_size) else {
+            return Ok(());
+        };
+        info!("Photo request");
+        let photo_url = tg_bot.tg_client.get_file_url(&photo.file_id).await?;
+
+        let result = tg_bot
+            .gtp_client(&message.chat)
+            .get_image_completion(text, photo_url)
+            .instrument(Span::current())
+            .await?;
+
+        info!("Sending answer to TG");
+
+        tg_bot
+            .tg_client
+            .send_message(message.chat.id, result.as_str(), "MarkdownV2".into())
+            .instrument(Span::current())
+            .await?;
+
+        info!("Complete");
+    }
+
+    Ok(())
+}
+
 #[instrument(skip_all)]
 async fn process_message(tg_bot: &TgBot, message: Message) -> Result<()> {
+    if message.photo.is_some() {
+        return process_photo(tg_bot, message).await;
+    }
+
     if let Some(text) = message.text {
         if text.contains("https://") {
             dummy_reaction(&tg_bot.tg_client, message.chat.id).await?;
@@ -101,7 +161,7 @@ async fn process_message(tg_bot: &TgBot, message: Message) -> Result<()> {
         let used_name = tg_bot
             .tg_bot_names
             .iter()
-            .map(|&name| name)
+            .copied()
             .find(|&name| text.starts_with(name));
 
         if should_answer(
@@ -113,7 +173,12 @@ async fn process_message(tg_bot: &TgBot, message: Message) -> Result<()> {
             let mut text =
                 used_name.map(|name| text.replace(name, "")).unwrap_or(text);
 
-            let first_name = message.from.first_name;
+            let first_name = message
+                .from
+                .first_name
+                .replace("Yury", "Юра")
+                .replace("Frol", "Фрол");
+
             let span =
                 span!(tracing::Level::INFO, "response", user_name = first_name);
 
@@ -126,7 +191,8 @@ async fn process_message(tg_bot: &TgBot, message: Message) -> Result<()> {
 
                 info!("Image request");
 
-                let url = tg_bot.gtp_client.get_image(text).await;
+                let url =
+                    tg_bot.gtp_client(&message.chat).get_image(text).await;
 
                 match url {
                     Ok(url) => {
@@ -158,7 +224,7 @@ async fn process_message(tg_bot: &TgBot, message: Message) -> Result<()> {
             info!("Ask GPT");
 
             let result = tg_bot
-                .gtp_client
+                .gtp_client(&message.chat)
                 .get_completion(text)
                 .instrument(Span::current())
                 .await?;
@@ -205,7 +271,7 @@ fn should_answer(
     reply_to_message: Option<Box<Message>>,
     chat: &Chat,
     used_name: Option<&str>,
-    tg_bot_allow_chats: &Vec<i64>,
+    tg_bot_allow_chats: &[i64],
 ) -> bool {
     (tg_bot_allow_chats.contains(&chat.id))
         && (chat.chat_type == PRIVATE_CHAT
@@ -248,8 +314,8 @@ async fn main() -> Result<(), Error> {
     let tg_bot_names = std::env::var("BOT_ALIAS")?.leak().split(',').collect();
 
     let tg_token = std::env::var("TG_TOKEN")?;
-    let gpt_token = std::env::var("GPT_TOKEN")?;
-    let gpt_model = std::env::var("GPT_MODEL")?;
+    let gpt_token = std::env::var("GPT_TOKEN")?.leak();
+    let gpt_model = std::env::var("GPT_MODEL")?.leak();    
     let base_rules = std::env::var("GPT_RULES")?;
     let gtp_preamble = std::env::var("GPT_PREAMBLE")?;
     let mut tg_bot_allow_chats = Vec::new();
@@ -259,10 +325,13 @@ async fn main() -> Result<(), Error> {
     }
 
     let tg_client = TgClient::new(tg_token);
-    let gtp_client = GtpClient::new(gpt_model, gpt_token, base_rules);
+    let gtp_client =
+        GtpClient::new(gpt_model, gpt_token, base_rules);
+    let private_gtp_client = GtpClient::new(gpt_model, gpt_token, String::default());
 
     let tg_bot = TgBot::new(
         gtp_client,
+        private_gtp_client,
         tg_client,
         tg_bot_names,
         tg_bot_allow_chats,
@@ -271,8 +340,9 @@ async fn main() -> Result<(), Error> {
 
     if cfg!(debug_assertions) {
         let message_path = Path::new(env!("CARGO_MANIFEST_DIR"));
-        
-        let message_json = std::fs::read_to_string(message_path.join("message.json"))?;
+
+        let message_json =
+            std::fs::read_to_string(message_path.join("message.json"))?;
 
         let message: Message = serde_json::from_str(message_json.as_str())?;
 

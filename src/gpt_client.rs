@@ -1,9 +1,9 @@
-use derive_more::Constructor;
-use futures::lock::Mutex;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
+use derive_more::{Constructor, From};
+use futures::lock::Mutex;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Constructor)]
 struct Request<'a> {
@@ -12,10 +12,31 @@ struct Request<'a> {
     temperature: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Constructor, Clone)]
-struct Message {
-    role: &'static str,
-    content: Arc<String>,
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "role", content = "content", rename_all = "snake_case")]
+enum Message {
+    User(Value),
+    System(Value),
+}
+
+#[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
+struct Url {
+    url: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
+enum Content {
+    Text { text: String },
+    ImageUrl { image_url: Url },
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(untagged)]
+enum Value {
+    Plain(Arc<String>),
+    Complex(Vec<Content>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,8 +71,8 @@ struct Usage {
 
 #[derive(Debug)]
 pub struct GtpClient {
-    token: String,
-    model: String,
+    token: &'static str,
+    model:  &'static str,
     http_client: reqwest::Client,
     chat_url: &'static str,
     dalle_url: &'static str,
@@ -68,16 +89,11 @@ struct DalleRequest<'a> {
 
 #[derive(Debug, Deserialize, Constructor)]
 struct DalleResponse {
-    data: Vec<DalleResponseData>,
-}
-
-#[derive(Debug, Deserialize, Constructor)]
-struct DalleResponseData {
-    url: String,
+    data: Vec<Url>,
 }
 
 impl GtpClient {
-    pub fn new(model: String, token: String, base_rules: String) -> Self {
+    pub fn new(model: &'static str, token: &'static str, base_rules: String) -> Self {
         let url = "https://api.openai.com/v1/chat/completions";
         let http_client = reqwest::Client::new();
 
@@ -87,12 +103,14 @@ impl GtpClient {
             http_client,
             chat_url: url,
             dalle_url: "https://api.openai.com/v1/images/generations",
-            messages: Mutex::new(vec![Message::new("user", base_rules.into())]),
+            messages: Mutex::new(vec![Message::User(Value::Plain(
+                base_rules.into(),
+            ))]),
         }
     }
 
-    pub async fn get_completion(&self, prompt: String) -> Result<Arc<String>> {
-        let message = Message::new("user", prompt.into());
+    async fn get_value_completion(&self, value: Value) -> Result<Arc<String>> {
+        let message = Message::User(value);
         let messages = {
             let mut messages = self.messages.lock().await;
 
@@ -100,7 +118,7 @@ impl GtpClient {
             messages.clone()
         };
 
-        let request_data = Request::new(self.model.as_str(), &messages, 0.7);
+        let request_data = Request::new(&self.model, &messages, 0.7);
         let token = &self.token;
         let response = self
             .http_client
@@ -112,9 +130,9 @@ impl GtpClient {
 
         if response.status().is_success() {
             let mut completion = response.json::<Response>().await?;
-            let choice = completion.choices.remove(0);
+            let choice = completion.choices.swap_remove(0);
             let result = Arc::new(choice.message.content);
-            let message = Message::new("system", result.clone());
+            let message = Message::System(Value::Plain(result.clone()));
 
             {
                 let mut messages = self.messages.lock().await;
@@ -125,6 +143,24 @@ impl GtpClient {
         } else {
             bail!(response.text().await?)
         }
+    }
+
+    pub async fn get_completion(&self, prompt: String) -> Result<Arc<String>> {
+        self.get_value_completion(Value::Plain(prompt.into())).await
+    }
+
+    pub async fn get_image_completion(
+        &self,
+        text: String,
+        image_url: String,
+    ) -> Result<Arc<String>> {
+        let value = Value::Complex(vec![
+            Content::Text { text },
+            Content::ImageUrl {
+                image_url: image_url.into(),
+            },
+        ]);
+        self.get_value_completion(value).await
     }
 
     pub async fn get_image(&self, prompt: &str) -> Result<String> {
