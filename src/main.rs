@@ -129,15 +129,28 @@ async fn process_photo(tg_bot: &TgBot, message: Message) -> Result<()> {
             .gtp_client(&message.chat)
             .get_image_completion(text, photo_url)
             .instrument(Span::current())
-            .await?;
+            .await;
 
         info!("Sending answer to TG");
-
-        tg_bot
-            .tg_client
-            .send_message(message.chat.id, result.as_str(), "MarkdownV2".into())
-            .instrument(Span::current())
-            .await?;
+        
+        match result {
+            Ok(result) => {
+                tg_bot
+                    .tg_client
+                    .send_message(message.chat.id, result.as_str(), "MarkdownV2".into())
+                    .instrument(Span::current())
+                    .await?;               
+            }
+            Err(error) => {                
+                tg_bot
+                    .tg_client
+                    .send_message(message.chat.id, "Прости, я задумался. Можешь повторить?", "MarkdownV2".into())
+                    .instrument(Span::current())
+                    .await?;
+                
+                bail!(error)
+            }
+        };
 
         info!("Complete");
     }

@@ -25,8 +25,7 @@ struct Url {
 }
 
 #[derive(Debug, Serialize, Clone)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum Content {
     Text { text: String },
     ImageUrl { image_url: Url },
@@ -72,7 +71,7 @@ struct Usage {
 #[derive(Debug)]
 pub struct GtpClient {
     token: &'static str,
-    model:  &'static str,
+    model: &'static str,
     http_client: reqwest::Client,
     chat_url: &'static str,
     dalle_url: &'static str,
@@ -81,7 +80,7 @@ pub struct GtpClient {
 
 #[derive(Debug, Serialize, Constructor)]
 struct DalleRequest<'a> {
-    model: &'a str,
+    model: &'static str,
     prompt: &'a str,
     n: i32,
     size: &'static str,
@@ -93,7 +92,11 @@ struct DalleResponse {
 }
 
 impl GtpClient {
-    pub fn new(model: &'static str, token: &'static str, base_rules: String) -> Self {
+    pub fn new(
+        model: &'static str,
+        token: &'static str,
+        base_rules: String,
+    ) -> Self {
         let url = "https://api.openai.com/v1/chat/completions";
         let http_client = reqwest::Client::new();
 
@@ -103,7 +106,7 @@ impl GtpClient {
             http_client,
             chat_url: url,
             dalle_url: "https://api.openai.com/v1/images/generations",
-            messages: Mutex::new(vec![Message::User(Value::Plain(
+            messages: Mutex::new(vec![Message::System(Value::Plain(
                 base_rules.into(),
             ))]),
         }
