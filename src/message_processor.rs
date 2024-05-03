@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail};
@@ -7,18 +5,27 @@ use chrono::{Duration, Utc};
 use derive_more::Constructor;
 use dyn_fmt::AsStrFormatExt;
 use lambda_http::{Body, Request, RequestPayloadExt};
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use thiserror::Error;
-use tracing::{error, info, Instrument, span, Span, warn};
+use tracing::{error, info, span, warn, Instrument, Span};
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpInteractor;
 use crate::tg_client::{
-    Chat, Message, PRIVATE_CHAT, TelegramInteractor, Update,
+    Chat, Message, TelegramInteractor, Update, PRIVATE_CHAT,
 };
 
 const DRAW_COMMAND: &str = "нарисуй";
+
+#[derive(Constructor)]
+pub struct Config {
+    name_map: HashMap<String, String>,
+    preamble: String,
+    dummy_answers: Vec<&'static str>,
+    tg_bot_allow_chats: Vec<i64>,
+    tg_bot_names: Vec<&'static str>,
+}
 
 #[derive(Constructor)]
 pub struct TgBot<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
@@ -26,11 +33,7 @@ pub struct TgBot<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     gtp_client: GtpClient,
     private_gtp_client: GtpClient,
     tg_client: TgClient,
-    tg_bot_names: Vec<&'static str>,
-    tg_bot_allow_chats: Vec<i64>,
-    dummy_answers: Vec<&'static str>,
-    preamble: String,
-    name_map: HashMap<String, String>,
+    config: Config,
     rng: fn() -> R,
 }
 
@@ -53,6 +56,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             }
 
             let used_name = self
+                .config
                 .tg_bot_names
                 .iter()
                 .copied()
@@ -62,7 +66,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                 message.reply_to_message,
                 &message.chat,
                 used_name,
-                &self.tg_bot_allow_chats,
+                &self.config.tg_bot_allow_chats,
             ) {
                 let text = used_name
                     .map(|name| text.replace(name, ""))
@@ -70,7 +74,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
                 let mut first_name = message.from.first_name;
 
-                for (name, replacement) in &self.name_map {
+                for (name, replacement) in &self.config.name_map {
                     first_name = first_name.replace(name, replacement);
                 }
 
@@ -106,7 +110,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         first_name: &str,
         chat: Chat,
     ) -> anyhow::Result<()> {
-        let mut prepend = self.preamble.format(&[first_name]);
+        let mut prepend = self.config.preamble.format(&[first_name]);
         prepend.push_str(text);
         let text = prepend;
 
@@ -169,6 +173,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         let text = message.caption.unwrap_or("Что на картинке?".to_string());
 
         let used_name = self
+            .config
             .tg_bot_names
             .iter()
             .copied()
@@ -178,7 +183,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             message.reply_to_message,
             &message.chat,
             used_name,
-            &self.tg_bot_allow_chats,
+            &self.config.tg_bot_allow_chats,
         ) {
             let Some(photos) = message.photo else {
                 return Ok(());
@@ -232,7 +237,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         let mut rng = (self.rng)();
         let num = rng.gen_range(0..100);
         if num < 30 {
-            self.dummy_answers.choose(&mut rng).copied()
+            self.config.dummy_answers.choose(&mut rng).copied()
         } else {
             None
         }
@@ -323,10 +328,10 @@ mod tests {
 
     use crate::gpt_client::MockGtpInteractor;
     use crate::tg_client::{
-        Chat, Message, MockTelegramInteractor, PhotoSize, PRIVATE_CHAT, User,
+        Chat, Message, MockTelegramInteractor, PhotoSize, User, PRIVATE_CHAT,
     };
 
-    use super::{should_answer, TgBot};
+    use super::{should_answer, Config, TgBot};
 
     // test for should_answer function
     #[test]
@@ -394,15 +399,20 @@ mod tests {
             public_gtp_client,
             private_gtp_client,
             tg_client,
-            vec!["simple bot"],
-            vec![0],
-            vec![
-                "Dummy answer",
-                "Another dummy answer",
-                "Yet another dummy answer",
-            ],
-            "Call me {}. ".to_string(),
-            HashMap::from_iter(vec![("Sam".to_string(), "Bob".to_string())]),
+            Config::new(
+                HashMap::from_iter(vec![(
+                    "Sam".to_string(),
+                    "Bob".to_string(),
+                )]),
+                "Call me {}. ".to_string(),
+                vec![
+                    "Dummy answer",
+                    "Another dummy answer",
+                    "Yet another dummy answer",
+                ],
+                vec![0],
+                vec!["simple bot"],
+            ),
             || StepRng::new(0, 0),
         );
         let result = bot.process_message(*message).await;
@@ -572,15 +582,17 @@ mod tests {
             public_gtp_client,
             gtp_client,
             tg_client,
-            vec!["bot_name"],
-            vec![123],
-            vec![
-                "Dummy answer",
-                "Another dummy answer",
-                "Yet another dummy answer",
-            ],
-            "preamble".to_string(),
-            HashMap::default(),
+            Config::new(
+                HashMap::default(),
+                "preamble".to_string(),
+                vec![
+                    "Dummy answer",
+                    "Another dummy answer",
+                    "Yet another dummy answer",
+                ],
+                vec![123],
+                vec!["bot_name"],
+            ),
             || StepRng::new(1000000000, 100000000),
         )
     }

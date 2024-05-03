@@ -10,7 +10,7 @@ use tracing::error;
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpClient;
-use crate::message_processor::{RequestError, TgBot};
+use crate::message_processor::{Config, RequestError, TgBot};
 use crate::tg_client::{Message, TgClient};
 
 mod event_handler;
@@ -91,11 +91,7 @@ async fn main() -> Result<(), Error> {
         gtp_client,
         private_gtp_client,
         tg_client,
-        tg_bot_names,
-        tg_bot_allow_chats,
-        dummy_answers,
-        gtp_preamble,
-        names_map,
+        Config::new(names_map, gtp_preamble, dummy_answers, tg_bot_allow_chats, tg_bot_names),
         rand::thread_rng,
     );
 
