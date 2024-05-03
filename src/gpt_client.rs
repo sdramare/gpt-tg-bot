@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::{bail, Result};
 use derive_more::{Constructor, From};
 use futures::lock::Mutex;
+#[cfg(test)]
+use mockall::automock;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Constructor)]
@@ -121,7 +123,7 @@ impl GtpClient {
             messages.clone()
         };
 
-        let request_data = Request::new(&self.model, &messages, 0.7);
+        let request_data = Request::new(self.model, &messages, 0.7);
         let token = &self.token;
         let response = self
             .http_client
@@ -147,12 +149,13 @@ impl GtpClient {
             bail!(response.text().await?)
         }
     }
+}
 
-    pub async fn get_completion(&self, prompt: String) -> Result<Arc<String>> {
+impl GtpInteractor for GtpClient {
+    async fn get_completion(&self, prompt: String) -> Result<Arc<String>> {
         self.get_value_completion(Value::Plain(prompt.into())).await
     }
-
-    pub async fn get_image_completion(
+    async fn get_image_completion(
         &self,
         text: String,
         image_url: String,
@@ -165,12 +168,11 @@ impl GtpClient {
         ]);
         self.get_value_completion(value).await
     }
-
-    pub async fn get_image(&self, prompt: &str) -> Result<String> {
+    async fn get_image(&self, prompt: &str) -> Result<String> {
         let dalle_request =
             DalleRequest::new("dall-e-3", prompt, 1, "1024x1024");
 
-        let token = &self.token;
+        let token = self.token;
         let response = self
             .http_client
             .post(self.dalle_url)
@@ -188,4 +190,15 @@ impl GtpClient {
             bail!(response.text().await?)
         }
     }
+}
+
+#[cfg_attr(test, automock)]
+pub trait GtpInteractor {
+    async fn get_completion(&self, prompt: String) -> Result<Arc<String>>;
+    async fn get_image_completion(
+        &self,
+        text: String,
+        image_url: String,
+    ) -> Result<Arc<String>>;
+    async fn get_image(&self, prompt: &str) -> Result<String>;
 }

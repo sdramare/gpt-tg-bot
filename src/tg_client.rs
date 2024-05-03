@@ -2,12 +2,14 @@ use anyhow::{bail, Result};
 use chrono::naive::serde::ts_seconds::deserialize as from_ts;
 use chrono::NaiveDateTime;
 use derive_more::Constructor;
+#[cfg(test)]
+use mockall::automock;
 use serde::{Deserialize, Serialize};
 
 pub const PRIVATE_CHAT: &str = "private";
 
 static ESCAPE_SYMBOLS: phf::Set<char> = phf::phf_set! {
-    '_', '*', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|','\\',
+    '_', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|','\\',
     '{', '}', '.', '!',
 };
 
@@ -140,14 +142,15 @@ impl TgClient {
             bail!(response.text().await?)
         }
     }
+}
 
-    pub async fn get_file_url(&self, file_id: &str) -> Result<String> {
+impl TelegramInteractor for TgClient {
+    async fn get_file_url(&self, file_id: &str) -> Result<String> {
         let file_path = self.get_file_path(file_id).await?;
         let base_url = self.download_file_url.as_str();
         Ok(format!("{base_url}/{file_path}"))
     }
-
-    pub async fn send_message(
+    async fn send_message(
         &self,
         chat_id: i64,
         text: &str,
@@ -184,8 +187,7 @@ impl TgClient {
 
         Ok(())
     }
-
-    pub async fn send_image(&self, chat_id: i64, url: &str) -> Result<()> {
+    async fn send_image(&self, chat_id: i64, url: &str) -> Result<()> {
         let request_data = TgMessageImageRequest::new(chat_id, url);
 
         let response = self
@@ -206,4 +208,16 @@ impl TgClient {
 
         Ok(())
     }
+}
+
+#[cfg_attr(test, automock)]
+pub trait TelegramInteractor {
+    async fn get_file_url(&self, file_id: &str) -> Result<String>;
+    async fn send_message(
+        &self,
+        chat_id: i64,
+        text: &str,
+        parse_mode: Option<&'static str>,
+    ) -> Result<()>;
+    async fn send_image(&self, chat_id: i64, url: &str) -> Result<()>;
 }
