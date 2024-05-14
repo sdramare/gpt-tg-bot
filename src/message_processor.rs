@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -32,7 +31,7 @@ pub struct Config {
     tg_bot_allow_chats: Vec<i64>,
     tg_bot_names: Vec<&'static str>,
     #[new(value = "std::time::Duration::from_secs(5)")]
-    message_delay: std::time::Duration,
+    message_delay: Duration,
 }
 
 #[derive(Constructor)]
@@ -77,29 +76,24 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     ) {
         let start = Instant::now() + duration;
 
-        let mut timeout = tokio::time::interval_at(start, duration * 5);
+        let mut timeout = tokio::time::interval_at(start, duration * 10);
 
         let mut interval = tokio::time::interval_at(start, duration);
 
         loop {
-            println!("Waiting for message");
             tokio::select! {
                 _ = timeout.tick() => {
 
-                    let  _ = tg_client
+                    let _ = tg_client
                     .send_message(chat_id, "Я не знаю что на это ответить", None)
                     .await;
 
                     break;
                 },
                 _ = tx.closed() => {
-                    let thread = thread::current().id();
-                    println!("Thread id: {:?}", thread);
-                    println!("Message received");
                     break;
                 },
                 _ = interval.tick() => {
-                    println!("Interval tick");
 
                     let result = tg_client
                     .send_message(chat_id, "Погоди, надо еще подумать", None)
@@ -400,7 +394,6 @@ pub enum RequestError {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::thread;
     use std::thread::sleep;
 
     use chrono::Utc;
@@ -480,20 +473,7 @@ mod tests {
             public_gtp_client,
             private_gtp_client,
             tg_client.into(),
-            Config::new(
-                HashMap::from_iter(vec![(
-                    "Sam".to_string(),
-                    "Bob".to_string(),
-                )]),
-                "Call me {}. ".to_string(),
-                vec![
-                    "Dummy answer",
-                    "Another dummy answer",
-                    "Yet another dummy answer",
-                ],
-                vec![0],
-                vec!["simple bot"],
-            ),
+            build_test_config(),
             || StepRng::new(0, 0),
         );
         let result = bot.process_message(*message).await;
@@ -512,8 +492,6 @@ mod tests {
             .times(1)
             .with(eq("Call me Bob. Hello".to_string()))
             .returning(|_| {
-                let thread = thread::current().id();
-                println!("Thread id: {:?}", thread);
                 sleep(std::time::Duration::from_millis(600));
                 Ok("How are you?".to_string().into())
             });
@@ -530,17 +508,7 @@ mod tests {
             .with(eq(0), eq("How are you?"), eq(Some("MarkdownV2")))
             .returning(|_, _, _| Ok(()));
 
-        let mut config = Config::new(
-            HashMap::from_iter(vec![("Sam".to_string(), "Bob".to_string())]),
-            "Call me {}. ".to_string(),
-            vec![
-                "Dummy answer",
-                "Another dummy answer",
-                "Yet another dummy answer",
-            ],
-            vec![0],
-            vec!["simple bot"],
-        );
+        let mut config = build_test_config();
 
         config.message_delay = std::time::Duration::from_millis(100);
 
@@ -553,6 +521,20 @@ mod tests {
         );
         let result = bot.process_message(*message).await;
         assert!(result.is_ok());
+    }
+
+    fn build_test_config() -> Config {
+        Config::new(
+            HashMap::from_iter(vec![("Sam".to_string(), "Bob".to_string())]),
+            "Call me {}. ".to_string(),
+            vec![
+                "Dummy answer",
+                "Another dummy answer",
+                "Yet another dummy answer",
+            ],
+            vec![0],
+            vec!["simple bot"],
+        )
     }
 
     // Test when the message contains a photo
