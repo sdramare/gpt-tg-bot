@@ -37,4 +37,6 @@ dyn-fmt = "0.4.0"
 thiserror = "1.0.57"
 dotenv = "0.15.0"
 log = "0.4.20"
+derive-new = "0.6.0"
+async-trait = "0.1.80"
 

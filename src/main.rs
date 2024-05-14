@@ -36,9 +36,8 @@ async fn function_handler<TEventHandler: EventHandler>(
             let body = error
                 .downcast_ref::<String>()
                 .map_or(Default::default(), |s| s.as_str());
-            let backtrace = error.backtrace();
 
-            error!({ ?body, ?msg, ?backtrace }, "Error on payload")
+            error!({ ?body, ?msg, ?error }, "Error on payload")
         } else {
             error!(?error, "Error on process")
         }
@@ -90,8 +89,14 @@ async fn main() -> Result<(), Error> {
     let tg_bot = TgBot::new(
         gtp_client,
         private_gtp_client,
-        tg_client,
-        Config::new(names_map, gtp_preamble, dummy_answers, tg_bot_allow_chats, tg_bot_names),
+        tg_client.into(),
+        Config::new(
+            names_map,
+            gtp_preamble,
+            dummy_answers,
+            tg_bot_allow_chats,
+            tg_bot_names,
+        ),
         rand::thread_rng,
     );
 

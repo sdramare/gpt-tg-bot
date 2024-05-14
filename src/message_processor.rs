@@ -1,30 +1,38 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use derive_more::Constructor;
+use derive_new::new;
 use dyn_fmt::AsStrFormatExt;
 use lambda_http::{Body, Request, RequestPayloadExt};
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::SliceRandom;
 use thiserror::Error;
-use tracing::{error, info, span, warn, Instrument, Span};
+use tokio::sync::oneshot;
+use tokio::time::Instant;
+use tracing::{error, info, Instrument, span, Span, warn};
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpInteractor;
 use crate::tg_client::{
-    Chat, Message, TelegramInteractor, Update, PRIVATE_CHAT,
+    Chat, Message, PRIVATE_CHAT, TelegramInteractor, Update,
 };
 
 const DRAW_COMMAND: &str = "нарисуй";
 
-#[derive(Constructor)]
+#[derive(new)]
 pub struct Config {
     name_map: HashMap<String, String>,
     preamble: String,
     dummy_answers: Vec<&'static str>,
     tg_bot_allow_chats: Vec<i64>,
     tg_bot_names: Vec<&'static str>,
+    #[new(value = "std::time::Duration::from_secs(5)")]
+    message_delay: std::time::Duration,
 }
 
 #[derive(Constructor)]
@@ -32,7 +40,7 @@ pub struct TgBot<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 {
     gtp_client: GtpClient,
     private_gtp_client: GtpClient,
-    tg_client: TgClient,
+    tg_client: Arc<TgClient>,
     config: Config,
     rng: fn() -> R,
 }
@@ -41,6 +49,76 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     TgBot<TgClient, GtpClient, R>
 {
     pub async fn process_message(
+        &self,
+        message: Message,
+    ) -> anyhow::Result<()> {
+        let chat_id = message.chat.id;
+
+        let (tx, mut rx) = oneshot::channel::<usize>();
+        let tg_client = self.tg_client.clone();
+        let duration = self.config.message_delay;
+
+        tokio::spawn(async move {
+            Self::wait_loop(tg_client, chat_id, duration, tx).await;
+        });
+
+        self.process_message_internal(message).await?;
+
+        rx.close();
+
+        Ok(())
+    }
+
+    async fn wait_loop(
+        tg_client: Arc<TgClient>,
+        chat_id: i64,
+        duration: Duration,
+        mut tx: oneshot::Sender<usize>,
+    ) {
+        let start = Instant::now() + duration;
+
+        let mut timeout = tokio::time::interval_at(start, duration * 5);
+
+        let mut interval = tokio::time::interval_at(start, duration);
+
+        loop {
+            println!("Waiting for message");
+            tokio::select! {
+                _ = timeout.tick() => {
+
+                    let  _ = tg_client
+                    .send_message(chat_id, "Я не знаю что на это ответить", None)
+                    .await;
+
+                    break;
+                },
+                _ = tx.closed() => {
+                    let thread = thread::current().id();
+                    println!("Thread id: {:?}", thread);
+                    println!("Message received");
+                    break;
+                },
+                _ = interval.tick() => {
+                    println!("Interval tick");
+
+                    let result = tg_client
+                    .send_message(chat_id, "Погоди, надо еще подумать", None)
+                    .await;
+
+                    match result {
+                        Ok(_) => {
+                            break;
+                        }
+                        Err(e) => {
+                            error!(?e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn process_message_internal(
         &self,
         message: Message,
     ) -> anyhow::Result<()> {
@@ -101,6 +179,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                 drop(_enter)
             }
         }
+
         Ok(())
     }
 
@@ -269,7 +348,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             }
             Some(message) => {
                 let utc = Utc::now().naive_utc();
-                if message.date < (utc - Duration::minutes(10)) {
+                if message.date < (utc - chrono::Duration::minutes(10)) {
                     warn!(date = ?message.date, "Too old message");
                     return Ok(());
                 }
@@ -321,6 +400,8 @@ pub enum RequestError {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::thread;
+    use std::thread::sleep;
 
     use chrono::Utc;
     use mockall::predicate::eq;
@@ -328,10 +409,10 @@ mod tests {
 
     use crate::gpt_client::MockGtpInteractor;
     use crate::tg_client::{
-        Chat, Message, MockTelegramInteractor, PhotoSize, User, PRIVATE_CHAT,
+        Chat, Message, MockTelegramInteractor, PhotoSize, PRIVATE_CHAT, User,
     };
 
-    use super::{should_answer, Config, TgBot};
+    use super::{Config, should_answer, TgBot};
 
     // test for should_answer function
     #[test]
@@ -398,7 +479,7 @@ mod tests {
         let bot = TgBot::new(
             public_gtp_client,
             private_gtp_client,
-            tg_client,
+            tg_client.into(),
             Config::new(
                 HashMap::from_iter(vec![(
                     "Sam".to_string(),
@@ -413,6 +494,61 @@ mod tests {
                 vec![0],
                 vec!["simple bot"],
             ),
+            || StepRng::new(0, 0),
+        );
+        let result = bot.process_message(*message).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_process_message_with_delay() {
+        let message = build_message().unwrap();
+        let mut tg_client = MockTelegramInteractor::new();
+        let mut private_gtp_client = MockGtpInteractor::new();
+        let public_gtp_client = MockGtpInteractor::new();
+
+        private_gtp_client
+            .expect_get_completion()
+            .times(1)
+            .with(eq("Call me Bob. Hello".to_string()))
+            .returning(|_| {
+                let thread = thread::current().id();
+                println!("Thread id: {:?}", thread);
+                sleep(std::time::Duration::from_millis(600));
+                Ok("How are you?".to_string().into())
+            });
+
+        tg_client
+            .expect_send_message()
+            .times(1)
+            .with(eq(0), eq("Погоди, надо еще подумать"), eq(None))
+            .returning(|_, _, _| Ok(()));
+
+        tg_client
+            .expect_send_message()
+            .times(1)
+            .with(eq(0), eq("How are you?"), eq(Some("MarkdownV2")))
+            .returning(|_, _, _| Ok(()));
+
+        let mut config = Config::new(
+            HashMap::from_iter(vec![("Sam".to_string(), "Bob".to_string())]),
+            "Call me {}. ".to_string(),
+            vec![
+                "Dummy answer",
+                "Another dummy answer",
+                "Yet another dummy answer",
+            ],
+            vec![0],
+            vec!["simple bot"],
+        );
+
+        config.message_delay = std::time::Duration::from_millis(100);
+
+        let bot = TgBot::new(
+            public_gtp_client,
+            private_gtp_client,
+            tg_client.into(),
+            config,
             || StepRng::new(0, 0),
         );
         let result = bot.process_message(*message).await;
@@ -581,7 +717,7 @@ mod tests {
         TgBot::new(
             public_gtp_client,
             gtp_client,
-            tg_client,
+            tg_client.into(),
             Config::new(
                 HashMap::default(),
                 "preamble".to_string(),
