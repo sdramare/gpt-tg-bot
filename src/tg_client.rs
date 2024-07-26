@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use chrono::naive::serde::ts_seconds::deserialize as from_ts;
@@ -5,6 +7,9 @@ use chrono::NaiveDateTime;
 use derive_more::Constructor;
 #[cfg(test)]
 use mockall::automock;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_retry::RetryTransientMiddleware;
 use serde::{Deserialize, Serialize};
 
 pub const PRIVATE_CHAT: &str = "private";
@@ -71,7 +76,7 @@ impl Chat {
 
 #[derive(Debug)]
 pub struct TgClient {
-    http_client: reqwest::Client,
+    http_client: ClientWithMiddleware,
     send_message_url: String,
     send_image_url: String,
     get_file_url: String,
@@ -106,7 +111,13 @@ struct FileMetadata {
 impl TgClient {
     pub fn new(token: String) -> Self {
         let url = format!("https://api.telegram.org/bot{token}");
-        let http_client = reqwest::Client::new();
+        let retry_policy = ExponentialBackoff::builder()
+            .retry_bounds(Duration::from_secs(2), Duration::from_secs(10))
+            .build_with_max_retries(3);
+        let http_client = ClientBuilder::new(reqwest::Client::new())
+            // Retry failed requests.
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
 
         TgClient {
             http_client,

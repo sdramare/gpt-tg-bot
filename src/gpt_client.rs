@@ -23,13 +23,13 @@ enum Message {
 
 #[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
 struct Url {
-    url: String,
+    url: Arc<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Content {
-    Text { text: String },
+    Text { text: Arc<String> },
     ImageUrl { image_url: Url },
 }
 
@@ -120,6 +120,7 @@ impl GtpClient {
             let mut messages = self.messages.lock().await;
 
             messages.push(message);
+
             messages.clone()
         };
 
@@ -161,14 +162,14 @@ impl GtpInteractor for GtpClient {
         image_url: String,
     ) -> Result<Arc<String>> {
         let value = Value::Complex(vec![
-            Content::Text { text },
+            Content::Text { text: text.into() },
             Content::ImageUrl {
-                image_url: image_url.into(),
+                image_url: Arc::new(image_url).into(),
             },
         ]);
         self.get_value_completion(value).await
     }
-    async fn get_image(&self, prompt: &str) -> Result<String> {
+    async fn get_image(&self, prompt: &str) -> Result<Arc<String>> {
         let dalle_request =
             DalleRequest::new("dall-e-3", prompt, 1, "1024x1024");
 
@@ -200,5 +201,5 @@ pub trait GtpInteractor {
         text: String,
         image_url: String,
     ) -> Result<Arc<String>>;
-    async fn get_image(&self, prompt: &str) -> Result<String>;
+    async fn get_image(&self, prompt: &str) -> Result<Arc<String>>;
 }

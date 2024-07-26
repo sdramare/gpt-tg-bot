@@ -30,7 +30,7 @@ pub struct Config {
     dummy_answers: Vec<&'static str>,
     tg_bot_allow_chats: Vec<i64>,
     tg_bot_names: Vec<&'static str>,
-    #[new(value = "std::time::Duration::from_secs(5)")]
+    #[new(value = "std::time::Duration::from_secs(6)")]
     message_delay: Duration,
 }
 
@@ -76,13 +76,15 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     ) {
         let start = Instant::now() + duration;
 
-        let mut timeout = tokio::time::interval_at(start, duration * 10);
+        let timeout = tokio::time::sleep(duration * 10);
+
+        tokio::pin!(timeout);
 
         let mut interval = tokio::time::interval_at(start, duration);
 
         loop {
             tokio::select! {
-                _ = timeout.tick() => {
+                _ = &mut timeout => {
 
                     let _ = tg_client
                     .send_message(chat_id, "Я не знаю что на это ответить", None)
@@ -218,7 +220,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
         match url {
             Ok(url) => {
-                self.tg_client.send_image(chat.id, url.as_str()).await?;
+                self.tg_client.send_image(chat.id, &url).await?;
             }
             Err(error) => {
                 error!(?error);
@@ -626,7 +628,7 @@ mod tests {
             .expect_get_image()
             .with(eq(" cat"))
             .times(1)
-            .returning(|_| Ok("url".to_string()));
+            .returning(|_| Ok("url".to_string().into()));
 
         tg_client
             .expect_send_image()

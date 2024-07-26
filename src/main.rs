@@ -2,10 +2,10 @@
 
 use std::path::Path;
 
-use anyhow::Result;
-use lambda_http::ext::PayloadError;
+use anyhow::{Context, Result};
+use lambda_http::{Body, Error, http, Request, Response, run, service_fn};
 use lambda_http::Body::Empty;
-use lambda_http::{http, run, service_fn, Body, Error, Request, Response};
+use lambda_http::ext::PayloadError;
 use tracing::error;
 
 use crate::event_handler::EventHandler;
@@ -18,9 +18,9 @@ mod gpt_client;
 mod message_processor;
 mod tg_client;
 
-async fn function_handler<TEventHandler: EventHandler>(
+async fn function_handler(
     event: Request,
-    tg_bot: &TEventHandler,
+    tg_bot: &impl EventHandler,
 ) -> Result<Response<Body>> {
     if let Err(error) = tg_bot.process_event(&event).await {
         if let Some(request_error) = error.downcast_ref::<RequestError>() {
@@ -49,6 +49,12 @@ async fn function_handler<TEventHandler: EventHandler>(
     Ok(resp)
 }
 
+macro_rules! context_env {
+    ($name: literal) => {
+        std::env::var($name).context($name)?
+    };
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     if cfg!(debug_assertions) {
@@ -64,18 +70,18 @@ async fn main() -> Result<(), Error> {
         .without_time()
         .init();
 
-    let tg_bot_names = std::env::var("BOT_ALIAS")?.leak().split(',').collect();
+    let tg_bot_names = context_env!("BOT_ALIAS").leak().split(',').collect();
     let dummy_answers =
-        std::env::var("DUMMY_ANSWERS")?.leak().split(',').collect();
+        context_env!("DUMMY_ANSWERS").leak().split(',').collect();
 
-    let tg_token = std::env::var("TG_TOKEN")?;
-    let gpt_token = std::env::var("GPT_TOKEN")?.leak();
-    let gpt_model = std::env::var("GPT_MODEL")?.leak();
-    let base_rules = std::env::var("GPT_RULES")?;
-    let gtp_preamble = std::env::var("GPT_PREAMBLE")?;
+    let tg_token = context_env!("TG_TOKEN");
+    let gpt_token = context_env!("GPT_TOKEN").leak();
+    let gpt_model = context_env!("GPT_MODEL").leak();
+    let base_rules = context_env!("GPT_RULES");
+    let gtp_preamble = context_env!("GPT_PREAMBLE");
     let mut tg_bot_allow_chats = Vec::new();
 
-    for chat_id in std::env::var("TG_ALLOW_CHATS")?.split(',') {
+    for chat_id in context_env!("TG_ALLOW_CHATS").split(',') {
         tg_bot_allow_chats.push(chat_id.parse::<i64>()?);
     }
 
@@ -83,7 +89,7 @@ async fn main() -> Result<(), Error> {
     let gtp_client = GtpClient::new(gpt_model, gpt_token, base_rules);
     let private_gtp_client =
         GtpClient::new(gpt_model, gpt_token, String::default());
-    let names_map = std::env::var("NAMES_MAP")?;
+    let names_map = context_env!("NAMES_MAP");
     let names_map = serde_json::from_str(&names_map)?;
 
     let tg_bot = TgBot::new(
