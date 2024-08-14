@@ -2,23 +2,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use chrono::Utc;
 use derive_more::Constructor;
 use derive_new::new;
 use dyn_fmt::AsStrFormatExt;
 use lambda_http::{Body, Request, RequestPayloadExt};
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
-use tracing::{error, info, Instrument, span, Span, warn};
+use tracing::{error, info, span, warn, Instrument, Span};
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpInteractor;
 use crate::tg_client::{
-    Chat, Message, PRIVATE_CHAT, TelegramInteractor, Update,
+    Chat, Message, TelegramInteractor, Update, PRIVATE_CHAT,
 };
 
 const DRAW_COMMAND: &str = "нарисуй";
@@ -30,7 +30,7 @@ pub struct Config {
     dummy_answers: Vec<&'static str>,
     tg_bot_allow_chats: Vec<i64>,
     tg_bot_names: Vec<&'static str>,
-    #[new(value = "std::time::Duration::from_secs(6)")]
+    #[new(value = "std::time::Duration::from_secs(10)")]
     message_delay: Duration,
 }
 
@@ -185,9 +185,13 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         first_name: &str,
         chat: Chat,
     ) -> anyhow::Result<()> {
-        let mut prepend = self.config.preamble.format(&[first_name]);
-        prepend.push_str(text);
-        let text = prepend;
+        let text = if chat.is_private() {
+            text.to_owned()
+        } else {
+            let mut prepend = self.config.preamble.format(&[first_name]);
+            prepend.push_str(text);
+            prepend
+        };
 
         info!("Ask GPT");
 
@@ -335,13 +339,10 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     EventHandler for TgBot<TgClient, GtpClient, R>
 {
     async fn process_event(&self, event: &Request) -> anyhow::Result<()> {
-        let update = get_update(event)?;
+        let update: Option<Update> = event.payload()?;
 
         match update.and_then(|x| x.message) {
-            None => {
-                let body = get_request_body(event.body());
-                bail!(RequestError::BadBody(body.to_string()));
-            }
+            None => bail!(RequestError::new("Message field is missing")),
             Some(message) => {
                 let utc = Utc::now().naive_utc();
                 if message.date < (utc - chrono::Duration::minutes(10)) {
@@ -369,27 +370,10 @@ fn should_answer(
             || reply_to_message.is_some_and(|reply| reply.from.is_bot))
 }
 
-fn get_update(event: &Request) -> anyhow::Result<Option<Update>> {
-    let update: Option<Update> = event.payload().map_err(|error| {
-        let body = get_request_body(event.body());
-        anyhow!(error).context(body.to_string())
-    })?;
-
-    Ok(update)
-}
-
-#[inline]
-fn get_request_body(body: &Body) -> &str {
-    match body {
-        Body::Text(text) => text,
-        _ => Default::default(),
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum RequestError {
-    #[error("Bad request body")]
-    BadBody(String),
+#[derive(Error, Debug, Constructor)]
+#[error("{msg:?}")]
+pub struct RequestError {
+    pub msg: &'static str,
 }
 
 //unit tests
@@ -404,10 +388,10 @@ mod tests {
 
     use crate::gpt_client::MockGtpInteractor;
     use crate::tg_client::{
-        Chat, Message, MockTelegramInteractor, PhotoSize, PRIVATE_CHAT, User,
+        Chat, Message, MockTelegramInteractor, PhotoSize, User, PRIVATE_CHAT,
     };
 
-    use super::{Config, should_answer, TgBot};
+    use super::{should_answer, Config, TgBot};
 
     // test for should_answer function
     #[test]

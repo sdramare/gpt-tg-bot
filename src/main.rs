@@ -1,16 +1,16 @@
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 
+use std::backtrace::Backtrace;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use lambda_http::{Body, Error, http, Request, Response, run, service_fn};
 use lambda_http::Body::Empty;
-use lambda_http::ext::PayloadError;
+use lambda_http::{http, run, service_fn, Body, Error, Request, Response};
 use tracing::error;
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpClient;
-use crate::message_processor::{Config, RequestError, TgBot};
+use crate::message_processor::{Config, TgBot};
 use crate::tg_client::{Message, TgClient};
 
 mod event_handler;
@@ -21,32 +21,26 @@ mod tg_client;
 async fn function_handler(
     event: Request,
     tg_bot: &impl EventHandler,
-) -> Result<Response<Body>> {
+) -> Result<Response<Body>, Box<dyn std::error::Error>> {
     if let Err(error) = tg_bot.process_event(&event).await {
-        if let Some(request_error) = error.downcast_ref::<RequestError>() {
-            match request_error {
-                RequestError::BadBody(body) => {
-                    let msg = request_error.to_string();
-                    error!({ ?body, ?msg, ?error }, "Error on request")
-                }
-            }
-        } else if let Some(payload_error) = error.downcast_ref::<PayloadError>()
-        {
-            let msg = payload_error.to_string();
-            let body = error
-                .downcast_ref::<String>()
-                .map_or(Default::default(), |s| s.as_str());
-
-            error!({ ?body, ?msg, ?error }, "Error on payload")
-        } else {
-            error!(?error, "Error on process")
-        }
+        let body = get_request_body(event.body());
+        let backtrace = Backtrace::force_capture();
+        error!({ ?body, ?backtrace, ?error }, "Error in request handler");
     };
 
     let resp = Response::builder()
         .status(http::StatusCode::OK)
         .body(Empty)?;
+
     Ok(resp)
+}
+
+#[inline]
+fn get_request_body(body: &Body) -> &str {
+    match body {
+        Body::Text(text) => text,
+        _ => Default::default(),
+    }
 }
 
 macro_rules! context_env {
