@@ -7,7 +7,7 @@ use chrono::Utc;
 use derive_more::Constructor;
 use derive_new::new;
 use dyn_fmt::AsStrFormatExt;
-use lambda_http::{Body, Request, RequestPayloadExt};
+use lambda_http::{Request, RequestPayloadExt};
 use rand::seq::SliceRandom;
 use rand::Rng;
 use thiserror::Error;
@@ -137,7 +137,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                 .find(|&name| text.starts_with(name));
 
             if should_answer(
-                message.reply_to_message,
+                message.reply_to_message.as_deref(),
                 &message.chat,
                 used_name,
                 &self.config.tg_bot_allow_chats,
@@ -160,15 +160,23 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
                 let _enter = span.enter();
 
-                if let Some(index) = text.to_lowercase().find(DRAW_COMMAND) {
-                    self.process_image_request(&text, &index, message.chat)
-                        .await?;
+                let result = self
+                    .process_and_answer(&message.chat, &text, &first_name)
+                    .await;
 
-                    return Ok(());
+                if let Err(error) = result {
+                    if message.chat.is_private() {
+                        let error_message = format!("```\n{}\n```", &error);
+                        self.tg_client
+                            .send_message(
+                                message.chat.id,
+                                &error_message,
+                                "MarkdownV2".into(),
+                            )
+                            .await?;
+                        return Err(error);
+                    }
                 }
-
-                self.process_text_message(&text, &first_name, message.chat)
-                    .await?;
 
                 info!("Complete");
 
@@ -179,11 +187,28 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         Ok(())
     }
 
+    async fn process_and_answer(
+        &self,
+        chat: &Chat,
+        text: &str,
+        first_name: &str,
+    ) -> anyhow::Result<()> {
+        if let Some(index) = text.to_lowercase().find(DRAW_COMMAND) {
+            self.process_image_request(text, &index, chat).await?;
+
+            return Ok(());
+        }
+
+        self.process_text_message(text, first_name, chat).await?;
+
+        Ok(())
+    }
+
     async fn process_text_message(
         &self,
         text: &str,
         first_name: &str,
-        chat: Chat,
+        chat: &Chat,
     ) -> anyhow::Result<()> {
         let text = if chat.is_private() {
             text.to_owned()
@@ -196,7 +221,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         info!("Ask GPT");
 
         let result = self
-            .gtp_client(&chat)
+            .gtp_client(chat)
             .get_completion(text)
             .instrument(Span::current())
             .await?;
@@ -214,20 +239,19 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         &self,
         text: &str,
         index: &usize,
-        chat: Chat,
+        chat: &Chat,
     ) -> anyhow::Result<()> {
         let text = &text[index + DRAW_COMMAND.len()..];
 
         info!("Image request");
 
-        let url = self.gtp_client(&chat).get_image(text).await;
+        let url = self.gtp_client(chat).get_image(text).await;
 
         match url {
             Ok(url) => {
                 self.tg_client.send_image(chat.id, &url).await?;
             }
             Err(error) => {
-                error!(?error);
                 self.tg_client
                     .send_message(
                         chat.id,
@@ -235,6 +259,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                         None,
                     )
                     .await?;
+                return Err(error);
             }
         }
         Ok(())
@@ -259,7 +284,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             .find(|&name| text.starts_with(name));
 
         if should_answer(
-            message.reply_to_message,
+            message.reply_to_message.as_deref(),
             &message.chat,
             used_name,
             &self.config.tg_bot_allow_chats,
@@ -359,7 +384,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 }
 
 fn should_answer(
-    reply_to_message: Option<Box<Message>>,
+    reply_to_message: Option<&Message>,
     chat: &Chat,
     used_name: Option<&str>,
     tg_bot_allow_chats: &[i64],
@@ -396,7 +421,7 @@ mod tests {
     // test for should_answer function
     #[test]
     fn test_should_answer() {
-        let reply_to_message = build_message();
+        let reply_to_message = build_private_message();
         let chat = Chat {
             id: 123,
             first_name: None,
@@ -407,7 +432,7 @@ mod tests {
         let used_name = Some("Hello");
         let tg_bot_allow_chats = vec![123];
         assert!(should_answer(
-            reply_to_message,
+            reply_to_message.as_deref(),
             &chat,
             used_name,
             &tg_bot_allow_chats
@@ -417,7 +442,7 @@ mod tests {
     // test for should_answer function for negative case
     #[test]
     fn test_should_answer_negative() {
-        let reply_to_message = build_message();
+        let reply_to_message = build_private_message();
         let chat = Chat {
             id: 123,
             first_name: None,
@@ -428,7 +453,7 @@ mod tests {
         let used_name = Some("Hello");
         let tg_bot_allow_chats = vec![124];
         assert!(!should_answer(
-            reply_to_message,
+            reply_to_message.as_deref(),
             &chat,
             used_name,
             &tg_bot_allow_chats
@@ -438,15 +463,15 @@ mod tests {
     //test for process_message function
     #[tokio::test]
     async fn test_process_message() {
-        let message = build_message().unwrap();
+        let message = build_public_message().unwrap();
         let mut tg_client = MockTelegramInteractor::new();
-        let mut private_gtp_client = MockGtpInteractor::new();
-        let public_gtp_client = MockGtpInteractor::new();
+        let private_gtp_client = MockGtpInteractor::new();
+        let mut public_gtp_client = MockGtpInteractor::new();
 
-        private_gtp_client
+        public_gtp_client
             .expect_get_completion()
             .times(1)
-            .with(eq("Call me Bob. Hello".to_string()))
+            .with(eq("Call me Bob.  Hello".to_string()))
             .returning(|_| Ok("How are you?".to_string().into()));
 
         tg_client
@@ -468,15 +493,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_process_message_with_delay() {
-        let message = build_message().unwrap();
+        let message = build_public_message().unwrap();
         let mut tg_client = MockTelegramInteractor::new();
-        let mut private_gtp_client = MockGtpInteractor::new();
-        let public_gtp_client = MockGtpInteractor::new();
+        let private_gtp_client = MockGtpInteractor::new();
+        let mut public_gtp_client = MockGtpInteractor::new();
 
-        private_gtp_client
+        public_gtp_client
             .expect_get_completion()
             .times(1)
-            .with(eq("Call me Bob. Hello".to_string()))
+            .with(eq("Call me Bob.  Hello".to_string()))
             .returning(|_| {
                 sleep(std::time::Duration::from_millis(600));
                 Ok("How are you?".to_string().into())
@@ -528,6 +553,7 @@ mod tests {
     async fn test_process_message_with_photo() {
         let mut tg_client = MockTelegramInteractor::new();
         let mut gtp_client = MockGtpInteractor::new();
+        let public_gtp_client = MockGtpInteractor::new();
 
         tg_client
             .expect_get_file_url()
@@ -547,8 +573,8 @@ mod tests {
             .with(eq(123), eq("Red image"), eq(Some("MarkdownV2")))
             .returning(|_, _, _| Ok(()));
 
-        let bot = create_bot(tg_client, gtp_client);
-        let message = create_message(
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message = create_private_message(
             None,
             Some(vec![PhotoSize {
                 file_id: "file_id".to_string(),
@@ -564,6 +590,7 @@ mod tests {
     async fn test_process_message_with_url() {
         let mut tg_client = MockTelegramInteractor::new();
         let gtp_client = MockGtpInteractor::new();
+        let public_gtp_client = MockGtpInteractor::new();
 
         tg_client
             .expect_send_message()
@@ -571,9 +598,11 @@ mod tests {
             .times(1)
             .returning(|_, _, _| Ok(()));
 
-        let bot = create_bot(tg_client, gtp_client);
-        let message =
-            create_message(Some("https://example.com".to_string()), None);
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message = create_public_message(
+            Some("https://example.com".to_string()),
+            None,
+        );
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }
@@ -582,9 +611,10 @@ mod tests {
     #[tokio::test]
     async fn test_process_message_with_bot_name() {
         let mut tg_client = MockTelegramInteractor::new();
-        let mut gtp_client = MockGtpInteractor::new();
+        let gtp_client = MockGtpInteractor::new();
+        let mut public_gtp_client = MockGtpInteractor::new();
 
-        gtp_client
+        public_gtp_client
             .expect_get_completion()
             .with(eq("preamble Hello".to_string()))
             .times(1)
@@ -596,8 +626,9 @@ mod tests {
             .times(1)
             .returning(|_, _, _| Ok(()));
 
-        let bot = create_bot(tg_client, gtp_client);
-        let message = create_message(Some("bot_name Hello".to_string()), None);
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message =
+            create_public_message(Some("bot_name Hello".to_string()), None);
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }
@@ -607,6 +638,7 @@ mod tests {
     async fn test_process_message_with_draw_command() {
         let mut tg_client = MockTelegramInteractor::new();
         let mut gtp_client = MockGtpInteractor::new();
+        let public_gtp_client = MockGtpInteractor::new();
 
         gtp_client
             .expect_get_image()
@@ -620,8 +652,9 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
 
-        let bot = create_bot(tg_client, gtp_client);
-        let message = create_message(Some("нарисуй cat".to_string()), None);
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message =
+            create_private_message(Some("нарисуй cat".to_string()), None);
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }
@@ -630,11 +663,12 @@ mod tests {
     #[tokio::test]
     async fn test_process_message_without_bot_name_or_draw_command() {
         let mut tg_client = MockTelegramInteractor::new();
-        let mut gtp_client = MockGtpInteractor::new();
+        let gtp_client = MockGtpInteractor::new();
+        let mut public_gtp_client = MockGtpInteractor::new();
 
-        gtp_client
+        public_gtp_client
             .expect_get_completion()
-            .with(eq("preambleHello".to_string()))
+            .with(eq("preamble Hello".to_string()))
             .times(1)
             .returning(|_| Ok("Hello Sir".to_string().into()));
 
@@ -644,13 +678,14 @@ mod tests {
             .times(1)
             .returning(|_, _, _| Ok(()));
 
-        let bot = create_bot(tg_client, gtp_client);
-        let message = create_message(Some("Hello".to_string()), None);
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message =
+            create_public_message(Some("bot_name Hello".to_string()), None);
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }
 
-    fn build_message() -> Option<Box<Message>> {
+    fn build_private_message() -> Option<Box<Message>> {
         Some(Box::new(Message {
             message_id: 0,
             from: User {
@@ -676,12 +711,37 @@ mod tests {
         }))
     }
 
+    fn build_public_message() -> Option<Box<Message>> {
+        Some(Box::new(Message {
+            message_id: 0,
+            from: User {
+                id: 0,
+                is_bot: false,
+                first_name: "Sam".to_string(),
+                last_name: None,
+                username: None,
+                language_code: None,
+            },
+            chat: Chat {
+                id: 0,
+                first_name: None,
+                last_name: None,
+                username: None,
+                chat_type: "PUBLIC".to_string(),
+            },
+            date: Default::default(),
+            text: Some("simple bot Hello".to_string()),
+            caption: None,
+            photo: None,
+            reply_to_message: None,
+        }))
+    }
+
     fn create_bot(
         tg_client: MockTelegramInteractor,
         gtp_client: MockGtpInteractor,
+        public_gtp_client: MockGtpInteractor,
     ) -> TgBot<MockTelegramInteractor, MockGtpInteractor, StepRng> {
-        let public_gtp_client = MockGtpInteractor::new();
-
         TgBot::new(
             public_gtp_client,
             gtp_client,
@@ -702,7 +762,7 @@ mod tests {
     }
 
     // Helper function to create a Message instance
-    fn create_message(
+    fn create_public_message(
         text: Option<String>,
         photo: Option<Vec<PhotoSize>>,
     ) -> Message {
@@ -721,7 +781,36 @@ mod tests {
                 first_name: None,
                 last_name: None,
                 username: None,
-                chat_type: "private".to_string(),
+                chat_type: "public".to_string(),
+            },
+            date: Utc::now().naive_utc(),
+            text,
+            caption: None,
+            photo,
+            reply_to_message: None,
+        }
+    }
+
+    fn create_private_message(
+        text: Option<String>,
+        photo: Option<Vec<PhotoSize>>,
+    ) -> Message {
+        Message {
+            message_id: 1,
+            from: User {
+                id: 1,
+                is_bot: false,
+                first_name: "Yury".to_string(),
+                last_name: None,
+                username: None,
+                language_code: None,
+            },
+            chat: Chat {
+                id: 123,
+                first_name: None,
+                last_name: None,
+                username: None,
+                chat_type: PRIVATE_CHAT.to_string(),
             },
             date: Utc::now().naive_utc(),
             text,
