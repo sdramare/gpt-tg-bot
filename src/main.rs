@@ -89,7 +89,7 @@ async fn main() -> Result<(), Error> {
     let tg_bot = TgBot::new(
         gtp_client,
         private_gtp_client,
-        tg_client.into(),
+        tg_client,
         Config::new(
             names_map,
             gtp_preamble,

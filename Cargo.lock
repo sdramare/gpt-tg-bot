@@ -374,7 +374,6 @@ name = "gpt-tg-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "derive-new",
  "derive_more",

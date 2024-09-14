@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -39,7 +38,7 @@ pub struct TgBot<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 {
     gtp_client: GtpClient,
     private_gtp_client: GtpClient,
-    tg_client: Arc<TgClient>,
+    tg_client: TgClient,
     config: Config,
     rng: fn() -> R,
 }
@@ -54,22 +53,25 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         let chat_id = message.chat.id;
 
         let (tx, mut rx) = oneshot::channel::<usize>();
-        let tg_client = self.tg_client.clone();
         let duration = self.config.message_delay;
 
-        tokio::spawn(async move {
-            Self::wait_loop(tg_client, chat_id, duration, tx).await;
-        });
+        let wait_loop = self.wait_loop(chat_id, duration, tx);
 
-        self.process_message_internal(message).await?;
+        let process_task = async {
+            let result = self.process_message_internal(message).await;
 
-        rx.close();
+            rx.close();
 
-        Ok(())
+            result
+        };
+
+        let (_, result) = tokio::join!(wait_loop, process_task);
+
+        result
     }
 
     async fn wait_loop(
-        tg_client: Arc<TgClient>,
+        &self,
         chat_id: i64,
         duration: Duration,
         mut tx: oneshot::Sender<usize>,
@@ -86,7 +88,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             tokio::select! {
                 _ = &mut timeout => {
 
-                    let _ = tg_client
+                    let _ = self.tg_client
                     .send_message(chat_id, "Я не знаю что на это ответить", None)
                     .await;
 
@@ -97,7 +99,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                 },
                 _ = interval.tick() => {
 
-                    let result = tg_client
+                    let result = self.tg_client
                     .send_message(chat_id, "Погоди, надо еще подумать", None)
                     .await;
 
@@ -483,7 +485,7 @@ mod tests {
         let bot = TgBot::new(
             public_gtp_client,
             private_gtp_client,
-            tg_client.into(),
+            tg_client,
             build_test_config(),
             || StepRng::new(0, 0),
         );
@@ -503,7 +505,7 @@ mod tests {
             .times(1)
             .with(eq("Call me Bob.  Hello".to_string()))
             .returning(|_| {
-                sleep(std::time::Duration::from_millis(600));
+                sleep(std::time::Duration::from_millis(1000));
                 Ok("How are you?".to_string().into())
             });
 
@@ -526,7 +528,7 @@ mod tests {
         let bot = TgBot::new(
             public_gtp_client,
             private_gtp_client,
-            tg_client.into(),
+            tg_client,
             config,
             || StepRng::new(0, 0),
         );

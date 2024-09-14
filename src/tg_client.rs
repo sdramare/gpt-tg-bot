@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{bail, Result};
-use async_trait::async_trait;
 use chrono::naive::serde::ts_seconds::deserialize as from_ts;
 use chrono::NaiveDateTime;
 use derive_more::Constructor;
@@ -156,7 +155,6 @@ impl TgClient {
     }
 }
 
-#[async_trait]
 impl TelegramInteractor for TgClient {
     async fn get_file_url(&self, file_id: &str) -> Result<String> {
         let file_path = self.get_file_path(file_id).await?;
@@ -224,8 +222,7 @@ impl TelegramInteractor for TgClient {
 }
 
 #[cfg_attr(test, automock)]
-#[async_trait]
-pub trait TelegramInteractor: Send + Sync + 'static {
+pub trait TelegramInteractor: Send + Sync {
     async fn get_file_url(&self, file_id: &str) -> Result<String>;
     async fn send_message(
         &self,
