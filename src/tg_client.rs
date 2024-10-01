@@ -13,9 +13,13 @@ use serde::{Deserialize, Serialize};
 
 pub const PRIVATE_CHAT: &str = "private";
 
-static ESCAPE_SYMBOLS: phf::Set<char> = phf::phf_set! {
+static ESCAPE_UNARY_SYMBOLS: phf::Set<char> = phf::phf_set! {
     '_', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|','\\',
     '{', '}', '.', '!',
+};
+
+static ESCAPE_PAIR_SYMBOLS: phf::Set<char> = phf::phf_set! {
+   '*',
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -153,30 +157,13 @@ impl TgClient {
             bail!(response.text().await?)
         }
     }
-}
 
-impl TelegramInteractor for TgClient {
-    async fn get_file_url(&self, file_id: &str) -> Result<String> {
-        let file_path = self.get_file_path(file_id).await?;
-        let base_url = self.download_file_url.as_str();
-        Ok(format!("{base_url}/{file_path}"))
-    }
-    async fn send_message(
+    async fn send_text(
         &self,
         chat_id: i64,
-        text: &str,
+        result_text: &str,
         parse_mode: Option<&'static str>,
     ) -> Result<()> {
-        let mut result_text = String::with_capacity(text.len());
-
-        for ch in text.chars() {
-            if ESCAPE_SYMBOLS.contains(&ch) {
-                result_text.push('\\');
-            }
-
-            result_text.push(ch);
-        }
-
         let request_data =
             TgMessageRequest::new(chat_id, &result_text, parse_mode);
 
@@ -194,6 +181,61 @@ impl TelegramInteractor for TgClient {
                 request_data.text
             );
             bail!(error);
+        }
+        Ok(())
+    }
+}
+
+const MAX_MSG_SIZE: usize = 4096;
+
+impl TelegramInteractor for TgClient {
+    async fn get_file_url(&self, file_id: &str) -> Result<String> {
+        let file_path = self.get_file_path(file_id).await?;
+        let base_url = self.download_file_url.as_str();
+        Ok(format!("{base_url}/{file_path}"))
+    }
+    async fn send_message(
+        &self,
+        chat_id: i64,
+        text: &str,
+        parse_mode: Option<&'static str>,
+    ) -> Result<()> {
+        let mut result_text = String::with_capacity(text.len());
+
+        let mut peekable = text.chars().peekable();
+        let mut prev = '\0';
+
+        while let Some(ch) = peekable.next() {
+            if ESCAPE_UNARY_SYMBOLS.contains(&ch)
+                || (ESCAPE_PAIR_SYMBOLS.contains(&ch)
+                    && (prev != ch
+                        && peekable.peek().is_some_and(|n_ch| *n_ch != ch)))
+            {
+                result_text.push('\\');
+            }
+
+            result_text.push(ch);
+            prev = ch
+        }
+
+        if result_text.chars().count() < MAX_MSG_SIZE {
+            self.send_text(chat_id, &result_text, parse_mode).await?;
+            return Ok(());
+        }
+
+        let mut i = 0;
+        let mut j = 0;
+        let len = result_text.len();
+
+        while i < len {
+            j += MAX_MSG_SIZE;
+            if j > len {
+                j = len;
+            };
+
+            let chunk = &result_text[i..j];
+            self.send_text(chat_id, chunk, parse_mode).await?;
+            i += MAX_MSG_SIZE;
         }
 
         Ok(())
