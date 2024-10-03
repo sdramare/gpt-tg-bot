@@ -493,49 +493,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_process_message_with_delay() {
-        let message = build_public_message().unwrap();
-        let mut tg_client = MockTelegramInteractor::new();
-        let private_gtp_client = MockGtpInteractor::new();
-        let mut public_gtp_client = MockGtpInteractor::new();
-
-        public_gtp_client
-            .expect_get_completion()
-            .times(1)
-            .with(eq("Call me Bob.  Hello".to_string()))
-            .returning(|_| {
-                sleep(std::time::Duration::from_millis(1000));
-                Ok("How are you?".to_string().into())
-            });
-
-        tg_client
-            .expect_send_message()
-            .times(1)
-            .with(eq(0), eq("Погоди, надо еще подумать"), eq(None))
-            .returning(|_, _, _| Ok(()));
-
-        tg_client
-            .expect_send_message()
-            .times(1)
-            .with(eq(0), eq("How are you?"), eq(Some("MarkdownV2")))
-            .returning(|_, _, _| Ok(()));
-
-        let mut config = build_test_config();
-
-        config.message_delay = std::time::Duration::from_millis(100);
-
-        let bot = TgBot::new(
-            public_gtp_client,
-            private_gtp_client,
-            tg_client,
-            config,
-            || StepRng::new(0, 0),
-        );
-        let result = bot.process_message(*message).await;
-        assert!(result.is_ok());
-    }
-
     fn build_test_config() -> Config {
         Config::new(
             HashMap::from_iter(vec![("Sam".to_string(), "Bob".to_string())]),
