@@ -19,6 +19,7 @@ struct Request<'a> {
 enum Message {
     User(Value),
     System(Value),
+    Assistant(Value),
 }
 
 #[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
@@ -102,15 +103,19 @@ impl GtpClient {
         let url = "https://api.openai.com/v1/chat/completions";
         let http_client = reqwest::Client::new();
 
+        let messages = if base_rules.is_empty() {
+            Vec::new()
+        } else {
+            vec![Message::System(Value::Plain(base_rules.into()))]
+        };
+
         GtpClient {
             token,
             model,
             http_client,
             chat_url: url,
             dalle_url: "https://api.openai.com/v1/images/generations",
-            messages: Mutex::new(vec![Message::System(Value::Plain(
-                base_rules.into(),
-            ))]),
+            messages: Mutex::new(messages),
         }
     }
 
@@ -124,7 +129,7 @@ impl GtpClient {
             messages.clone()
         };
 
-        let request_data = Request::new(self.model, &messages, 0.7);
+        let request_data = Request::new(self.model, &messages, 1.0);
         let token = &self.token;
         let response = self
             .http_client
@@ -138,7 +143,7 @@ impl GtpClient {
             let mut completion = response.json::<Response>().await?;
             let choice = completion.choices.swap_remove(0);
             let result = Arc::new(choice.message.content);
-            let message = Message::System(Value::Plain(result.clone()));
+            let message = Message::Assistant(Value::Plain(result.clone()));
 
             {
                 let mut messages = self.messages.lock().await;
