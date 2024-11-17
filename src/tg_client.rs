@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 
 pub const PRIVATE_CHAT: &str = "private";
 
+const MAX_MSG_SIZE: usize = 4096;
+
 static ESCAPE_UNARY_SYMBOLS: phf::Set<char> = phf::phf_set! {
     '_', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|','\\',
     '{', '}', '.', '!',
@@ -165,7 +167,7 @@ impl TgClient {
         parse_mode: Option<&'static str>,
     ) -> Result<()> {
         let request_data =
-            TgMessageRequest::new(chat_id, &result_text, parse_mode);
+            TgMessageRequest::new(chat_id, result_text, parse_mode);
 
         let response = self
             .http_client
@@ -184,45 +186,13 @@ impl TgClient {
         }
         Ok(())
     }
-}
 
-const MAX_MSG_SIZE: usize = 4096;
-
-impl TelegramInteractor for TgClient {
-    async fn get_file_url(&self, file_id: &str) -> Result<String> {
-        let file_path = self.get_file_path(file_id).await?;
-        let base_url = self.download_file_url.as_str();
-        Ok(format!("{base_url}/{file_path}"))
-    }
-    async fn send_message(
+    async fn send_message_by_chunks(
         &self,
         chat_id: i64,
-        text: &str,
         parse_mode: Option<&'static str>,
+        result_text: &str,
     ) -> Result<()> {
-        let mut result_text = String::with_capacity(text.len());
-
-        let mut peekable = text.chars().peekable();
-        let mut prev = '\0';
-
-        while let Some(ch) = peekable.next() {
-            if ESCAPE_UNARY_SYMBOLS.contains(&ch)
-                || (ESCAPE_PAIR_SYMBOLS.contains(&ch)
-                    && (prev != ch
-                        && peekable.peek().is_some_and(|n_ch| *n_ch != ch)))
-            {
-                result_text.push('\\');
-            }
-
-            result_text.push(ch);
-            prev = ch
-        }
-
-        if result_text.chars().count() < MAX_MSG_SIZE {
-            self.send_text(chat_id, &result_text, parse_mode).await?;
-            return Ok(());
-        }
-
         let mut i = 0;
         let mut j = 0;
         let len = result_text.len();
@@ -237,9 +207,35 @@ impl TelegramInteractor for TgClient {
             self.send_text(chat_id, chunk, parse_mode).await?;
             i += MAX_MSG_SIZE;
         }
+        Ok(())
+    }    
+}
+
+impl TelegramInteractor for TgClient {
+    async fn get_file_url(&self, file_id: &str) -> Result<String> {
+        let file_path = self.get_file_path(file_id).await?;
+        let base_url = self.download_file_url.as_str();
+        Ok(format!("{base_url}/{file_path}"))
+    }
+    async fn send_message(
+        &self,
+        chat_id: i64,
+        text: &str,
+        parse_mode: Option<&'static str>,
+    ) -> Result<()> {
+        let result_text = escape_text(text);
+
+        if result_text.chars().count() < MAX_MSG_SIZE {
+            self.send_text(chat_id, &result_text, parse_mode).await?;
+            return Ok(());
+        }
+
+        self.send_message_by_chunks(chat_id, parse_mode, &result_text)
+            .await?;
 
         Ok(())
     }
+
     async fn send_image(&self, chat_id: i64, url: &str) -> Result<()> {
         let request_data = TgMessageImageRequest::new(chat_id, url);
 
@@ -261,6 +257,27 @@ impl TelegramInteractor for TgClient {
 
         Ok(())
     }
+}
+
+fn escape_text(text: &str) -> String {
+    let mut result_text = String::with_capacity(text.len());
+
+    let mut peekable = text.chars().peekable();
+    let mut prev = '\0';
+
+    while let Some(ch) = peekable.next() {
+        if ESCAPE_UNARY_SYMBOLS.contains(&ch)
+            || (ESCAPE_PAIR_SYMBOLS.contains(&ch)
+            && (prev != ch
+            && peekable.peek().is_some_and(|n_ch| *n_ch != ch)))
+        {
+            result_text.push('\\');
+        }
+
+        result_text.push(ch);
+        prev = ch
+    }
+    result_text
 }
 
 #[cfg_attr(test, automock)]

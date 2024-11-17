@@ -407,7 +407,6 @@ pub struct RequestError {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::thread::sleep;
 
     use chrono::Utc;
     use mockall::predicate::eq;
