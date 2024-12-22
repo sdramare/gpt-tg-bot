@@ -75,6 +75,7 @@ struct Usage {
 pub struct GtpClient {
     token: &'static str,
     model: &'static str,
+    smart_model: &'static str,
     http_client: reqwest::Client,
     chat_url: &'static str,
     dalle_url: &'static str,
@@ -94,9 +95,15 @@ struct DalleResponse {
     data: Vec<Url>,
 }
 
+enum ModelMode {
+    Fast,
+    Smart,
+}
+
 impl GtpClient {
     pub fn new(
         model: &'static str,
+        smart_model: &'static str,
         token: &'static str,
         base_rules: String,
     ) -> Self {
@@ -112,6 +119,7 @@ impl GtpClient {
         GtpClient {
             token,
             model,
+            smart_model,
             http_client,
             chat_url: url,
             dalle_url: "https://api.openai.com/v1/images/generations",
@@ -119,7 +127,11 @@ impl GtpClient {
         }
     }
 
-    async fn get_value_completion(&self, value: Value) -> Result<Arc<String>> {
+    async fn get_value_completion(
+        &self,
+        value: Value,
+        mode: ModelMode,
+    ) -> Result<Arc<String>> {
         let message = Message::User(value);
         let messages = {
             let mut messages = self.messages.lock().await;
@@ -129,7 +141,11 @@ impl GtpClient {
             messages.clone()
         };
 
-        let request_data = Request::new(self.model, &messages, 1.0);
+        let model = match mode {
+            ModelMode::Fast => self.model,
+            ModelMode::Smart => self.smart_model,
+        };
+        let request_data = Request::new(model, &messages, 1.0);
         let token = &self.token;
         let response = self
             .http_client
@@ -159,8 +175,18 @@ impl GtpClient {
 
 impl GtpInteractor for GtpClient {
     async fn get_completion(&self, prompt: String) -> Result<Arc<String>> {
-        self.get_value_completion(Value::Plain(prompt.into())).await
+        self.get_value_completion(Value::Plain(prompt.into()), ModelMode::Fast)
+            .await
     }
+
+    async fn get_smart_completion(
+        &self,
+        prompt: String,
+    ) -> Result<Arc<String>> {
+        self.get_value_completion(Value::Plain(prompt.into()), ModelMode::Smart)
+            .await
+    }
+
     async fn get_image_completion(
         &self,
         text: String,
@@ -172,7 +198,7 @@ impl GtpInteractor for GtpClient {
                 image_url: Arc::new(image_url).into(),
             },
         ]);
-        self.get_value_completion(value).await
+        self.get_value_completion(value, ModelMode::Fast).await
     }
     async fn get_image(&self, prompt: &str) -> Result<Arc<String>> {
         let dalle_request =
@@ -201,6 +227,8 @@ impl GtpInteractor for GtpClient {
 #[cfg_attr(test, automock)]
 pub trait GtpInteractor {
     async fn get_completion(&self, prompt: String) -> Result<Arc<String>>;
+    async fn get_smart_completion(&self, prompt: String)
+        -> Result<Arc<String>>;
     async fn get_image_completion(
         &self,
         text: String,

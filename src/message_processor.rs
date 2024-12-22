@@ -29,8 +29,8 @@ pub struct Config {
     dummy_answers: Vec<&'static str>,
     tg_bot_allow_chats: Vec<i64>,
     tg_bot_names: Vec<&'static str>,
-    #[new(value = "std::time::Duration::from_secs(10)")]
-    message_delay: Duration,
+    #[new(value = "std::time::Duration::from_secs(20)")]
+    pub message_delay: Duration,
 }
 
 #[derive(Constructor)]
@@ -222,11 +222,20 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
         info!("Ask GPT");
 
-        let result = self
-            .gtp_client(chat)
-            .get_completion(text)
-            .instrument(Span::current())
-            .await?;
+        let result = if chat.is_private()
+            && text.to_lowercase().contains("подумай")
+        {
+            info!("Smart completion");
+            self.gtp_client(chat)
+                .get_smart_completion(text)
+                .instrument(Span::current())
+                .await?
+        } else {
+            self.gtp_client(chat)
+                .get_completion(text)
+                .instrument(Span::current())
+                .await?
+        };
 
         info!("Sending answer to TG");
 

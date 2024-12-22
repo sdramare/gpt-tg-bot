@@ -10,6 +10,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 pub const PRIVATE_CHAT: &str = "private";
 
@@ -177,11 +178,12 @@ impl TgClient {
             .await?;
 
         if !response.status().is_success() {
-            let error = format!(
+            let tg_error = response.text().await?;
+            error!(
                 "Telegram send error. Error: {}. Request {}",
-                response.text().await?,
-                request_data.text
+                tg_error, request_data.text
             );
+            let error = format!("Telegram send error. Error: {}", tg_error);
             bail!(error);
         }
         Ok(())
@@ -208,7 +210,7 @@ impl TgClient {
             i += MAX_MSG_SIZE;
         }
         Ok(())
-    }    
+    }
 }
 
 impl TelegramInteractor for TgClient {
@@ -268,8 +270,8 @@ fn escape_text(text: &str) -> String {
     while let Some(ch) = peekable.next() {
         if ESCAPE_UNARY_SYMBOLS.contains(&ch)
             || (ESCAPE_PAIR_SYMBOLS.contains(&ch)
-            && (prev != ch
-            && peekable.peek().is_some_and(|n_ch| *n_ch != ch)))
+                && (prev != ch
+                    && peekable.peek().is_some_and(|n_ch| *n_ch != ch)))
         {
             result_text.push('\\');
         }

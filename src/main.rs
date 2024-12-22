@@ -2,8 +2,10 @@
 
 use std::backtrace::Backtrace;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use dotenvy::dotenv;
 use lambda_http::Body::Empty;
 use lambda_http::{http, run, service_fn, Body, Error, Request, Response};
 use tracing::error;
@@ -52,7 +54,7 @@ macro_rules! context_env {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     if cfg!(debug_assertions) {
-        dotenv::dotenv()?;
+        dotenv()?;
     }
 
     tracing_subscriber::fmt()
@@ -71,8 +73,11 @@ async fn main() -> Result<(), Error> {
     let tg_token = context_env!("TG_TOKEN");
     let gpt_token = context_env!("GPT_TOKEN").leak();
     let gpt_model = context_env!("GPT_MODEL").leak();
+    let gpt_smart_model = context_env!("GPT_SMART_MODEL").leak();
     let base_rules = context_env!("GPT_RULES");
     let gtp_preamble = context_env!("GPT_PREAMBLE");
+    let heartbeat_interval_seconds =
+        std::env::var("HEARTBEAT_INTERVAL_SECONDS");
     let mut tg_bot_allow_chats = Vec::new();
 
     for chat_id in context_env!("TG_ALLOW_CHATS").split(',') {
@@ -80,23 +85,35 @@ async fn main() -> Result<(), Error> {
     }
 
     let tg_client = TgClient::new(tg_token);
-    let gtp_client = GtpClient::new(gpt_model, gpt_token, base_rules);
-    let private_gtp_client =
-        GtpClient::new(gpt_model, gpt_token, String::default());
+    let gtp_client =
+        GtpClient::new(gpt_model, gpt_smart_model, gpt_token, base_rules);
+    let private_gtp_client = GtpClient::new(
+        gpt_model,
+        gpt_smart_model,
+        gpt_token,
+        String::default(),
+    );
     let names_map = context_env!("NAMES_MAP");
     let names_map = serde_json::from_str(&names_map)?;
+
+    let mut config = Config::new(
+        names_map,
+        gtp_preamble,
+        dummy_answers,
+        tg_bot_allow_chats,
+        tg_bot_names,
+    );
+
+    if let Ok(heartbeat_interval_seconds) = heartbeat_interval_seconds {
+        config.message_delay =
+            Duration::from_secs(heartbeat_interval_seconds.parse()?);
+    }
 
     let tg_bot = TgBot::new(
         gtp_client,
         private_gtp_client,
         tg_client,
-        Config::new(
-            names_map,
-            gtp_preamble,
-            dummy_answers,
-            tg_bot_allow_chats,
-            tg_bot_names,
-        ),
+        config,
         rand::thread_rng,
     );
 
