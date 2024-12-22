@@ -223,7 +223,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         info!("Ask GPT");
 
         let result = if chat.is_private()
-            && text.to_lowercase().contains("подумай")
+            && contains_case_insensitive(&text, "подумай")
         {
             info!("Smart completion");
             self.gtp_client(chat)
@@ -406,6 +406,57 @@ fn should_answer(
             || reply_to_message.is_some_and(|reply| reply.from.is_bot))
 }
 
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let haystack_chars: Vec<char> = haystack.chars().collect();
+    let needle_chars: Vec<char> = needle.chars().collect();
+
+    let n = haystack_chars.len();
+    let m = needle_chars.len();
+
+    let mut pi = vec![0; m];
+    let mut k = 0;
+    for q in 1..m {
+        while k > 0 && !eq_case_insensitive(needle_chars[k], needle_chars[q]) {
+            k = pi[k - 1];
+        }
+        if eq_case_insensitive(needle_chars[k], needle_chars[q]) {
+            k += 1;
+        }
+        pi[q] = k;
+    }
+
+    let mut q = 0;
+    for ch in haystack_chars.into_iter().take(n) {
+        while q > 0 && !eq_case_insensitive(needle_chars[q], ch) {
+            q = pi[q - 1];
+        }
+        if eq_case_insensitive(needle_chars[q], ch) {
+            q += 1;
+        }
+        if q == m {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn eq_case_insensitive(a: char, b: char) -> bool {
+    let mut a_lower = a.to_lowercase();
+    let mut b_lower = b.to_lowercase();
+    loop {
+        match (a_lower.next(), b_lower.next()) {
+            (Some(a_c), Some(b_c)) if a_c == b_c => continue,
+            (None, None) => return true,
+            _ => return false,
+        }
+    }
+}
+
 #[derive(Error, Debug, Constructor)]
 #[error("{msg:?}")]
 pub struct RequestError {
@@ -422,11 +473,18 @@ mod tests {
     use rand::rngs::mock::StepRng;
 
     use crate::gpt_client::MockGtpInteractor;
+    use crate::message_processor::contains_case_insensitive;
     use crate::tg_client::{
         Chat, Message, MockTelegramInteractor, PhotoSize, User, PRIVATE_CHAT,
     };
 
     use super::{should_answer, Config, TgBot};
+
+    #[test]
+    fn test_contains_case_insensitive() {
+        assert!(contains_case_insensitive("Hello", "hello"));
+        assert!(contains_case_insensitive("Придумай", "придумай"));
+    }
 
     // test for should_answer function
     #[test]
