@@ -411,10 +411,9 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
         return true;
     }
 
-    let haystack_chars: Vec<char> = haystack.chars().collect();
+    let haystack_chars = haystack.chars();
     let needle_chars: Vec<char> = needle.chars().collect();
 
-    let n = haystack_chars.len();
     let m = needle_chars.len();
 
     let mut pi = vec![0; m];
@@ -430,7 +429,7 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     }
 
     let mut q = 0;
-    for ch in haystack_chars.into_iter().take(n) {
+    for ch in haystack_chars {
         while q > 0 && !eq_case_insensitive(needle_chars[q], ch) {
             q = pi[q - 1];
         }
@@ -770,7 +769,7 @@ mod tests {
         TgBot::new(
             public_gtp_client,
             gtp_client,
-            tg_client.into(),
+            tg_client,
             Config::new(
                 HashMap::default(),
                 "preamble".to_string(),
