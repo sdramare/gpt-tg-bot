@@ -6,6 +6,7 @@ use chrono::NaiveDateTime;
 use derive_more::Constructor;
 #[cfg(test)]
 use mockall::automock;
+use reqwest::multipart;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
@@ -85,6 +86,8 @@ pub struct TgClient {
     http_client: ClientWithMiddleware,
     send_message_url: String,
     send_image_url: String,
+    send_voice_url: String,
+    left_url: String,
     get_file_url: String,
     download_file_url: String,
 }
@@ -107,6 +110,7 @@ struct TgMessageImageRequest<'a> {
 struct TgResponse<T> {
     ok: bool,
     result: Option<T>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +133,8 @@ impl TgClient {
             http_client,
             send_message_url: format!("{url}/sendMessage"),
             send_image_url: format!("{url}/sendPhoto"),
+            send_voice_url: format!("{url}/sendVoice"),
+            left_url: format!("{url}/leaveChat"),
             get_file_url: format!("{url}/getFile"),
             download_file_url: format!(
                 "https://api.telegram.org/file/bot{token}"
@@ -206,7 +212,12 @@ impl TgClient {
             };
 
             let chunk = &result_text[i..j];
-            self.send_text(chat_id, chunk, parse_mode).await?;
+            let res = self.send_text(chat_id, chunk, parse_mode).await;
+            if res.is_err() {
+                j -= 1;
+                let chunk = &result_text[i..j];
+                self.send_text(chat_id, chunk, parse_mode).await?;
+            }
             i += MAX_MSG_SIZE;
         }
         Ok(())
@@ -259,6 +270,58 @@ impl TelegramInteractor for TgClient {
 
         Ok(())
     }
+
+    async fn send_voice(&self, chat_id: i64, audio: Vec<u8>) -> Result<()> {
+        let part = multipart::Part::bytes(audio)
+            .file_name("voice.mp3")
+            .mime_str("audio/mp3")?;
+        let form = multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("voice", part);
+
+        let response = reqwest::Client::new()
+            .post(&self.send_voice_url)
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error = format!(
+                "Telegram send voice error. Error: {}.",
+                response.text().await?
+            );
+            bail!(error);
+        }
+
+        let tg_response = response.json::<TgResponse<Message>>().await?;
+        if !tg_response.ok {
+            bail!(
+                "Tg response error: {}",
+                tg_response.error.unwrap_or_default()
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn leave_chat(&self, chat_id: i64) -> Result<()> {
+        let response = self
+            .http_client
+            .get(&self.left_url)
+            .query(&[("chat_id", chat_id)])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error = format!(
+                "Telegram leave chat error. Error: {}.",
+                response.text().await?
+            );
+            bail!(error);
+        }
+
+        Ok(())
+    }
 }
 
 fn escape_text(text: &str) -> String {
@@ -292,4 +355,32 @@ pub trait TelegramInteractor: Send + Sync {
         parse_mode: Option<&'static str>,
     ) -> Result<()>;
     async fn send_image(&self, chat_id: i64, url: &str) -> Result<()>;
+    async fn send_voice(&self, chat_id: i64, audio: Vec<u8>) -> Result<()>;
+    async fn leave_chat(&self, chat_id: i64) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tg_client::escape_text;
+
+    #[tokio::test]
+    async fn test_escape_text() {
+        let text = "Hello *world*!";
+        let escaped_text = escape_text(text);
+        assert_eq!(escaped_text, "Hello \\*world\\*\\!");
+    }
+
+    #[tokio::test]
+    async fn test_escape_text_with_unary_symbols() {
+        let text = "Hello _world_!";
+        let escaped_text = escape_text(text);
+        assert_eq!(escaped_text, "Hello \\_world\\_\\!");
+    }
+
+    #[tokio::test]
+    async fn test_escape_text_with_pair_symbols() {
+        let text = "Hello **world**!";
+        let escaped_text = escape_text(text);
+        assert_eq!(escaped_text, "Hello **world**\\!");
+    }
 }

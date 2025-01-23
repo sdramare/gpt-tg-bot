@@ -239,10 +239,37 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
         info!("Sending answer to TG");
 
+        if !chat.is_private() {
+            if result.contains("из чата")
+                || result.contains("уйти")
+                || result.contains("выйти")
+                || result.contains("выйду")
+            {
+                let num = self.get_random_number();
+                if num < 20 {
+                    self.tg_client.leave_chat(chat.id).await?;
+                    return Ok(());
+                }
+            }
+
+            let num = self.get_random_number();
+            if num > 100 {
+                let audio = self.gtp_client(chat).get_audio(&result).await?;
+
+                let res = self.tg_client.send_voice(chat.id, audio).await;
+
+                if let Err(err) = res {
+                    warn!(?err);
+                } else {
+                    return Ok(());
+                }
+            }
+        }
+
         self.tg_client
-            .send_message(chat.id, result.as_str(), "MarkdownV2".into())
-            .instrument(Span::current())
+            .send_message(chat.id, &result, "MarkdownV2".into())
             .await?;
+
         Ok(())
     }
 
@@ -300,12 +327,12 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             used_name,
             &self.config.tg_bot_allow_chats,
         ) {
-            let Some(photos) = message.photo else {
+            let Some(photo) = message.photo.and_then(|photos| {
+                photos.into_iter().max_by_key(|x| x.file_size)
+            }) else {
                 return Ok(());
             };
-            let Some(photo) = photos.iter().max_by_key(|x| x.file_size) else {
-                return Ok(());
-            };
+
             info!("Photo request");
             let photo_url = self.tg_client.get_file_url(&photo.file_id).await?;
 
@@ -346,6 +373,11 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         }
 
         Ok(())
+    }
+
+    fn get_random_number(&self) -> i32 {
+        let mut rng = (self.rng)();
+        rng.gen_range(0..100)
     }
 
     fn get_random_answer(&self) -> Option<&str> {

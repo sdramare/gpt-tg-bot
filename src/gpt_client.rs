@@ -75,6 +75,7 @@ struct Usage {
 pub struct GtpClient {
     token: &'static str,
     model: &'static str,
+    voice: &'static str,
     smart_model: &'static str,
     http_client: reqwest::Client,
     chat_url: &'static str,
@@ -95,6 +96,13 @@ struct DalleResponse {
     data: Vec<Url>,
 }
 
+#[derive(Serialize, Constructor)]
+struct AudioSpeechRequest<'a> {
+    model: &'a str,
+    input: &'a str,
+    voice: &'a str,
+}
+
 enum ModelMode {
     Fast,
     Smart,
@@ -102,12 +110,14 @@ enum ModelMode {
 
 impl GtpClient {
     pub fn new(
+        api_url: &'static str,
         model: &'static str,
         smart_model: &'static str,
+        voice: &'static str,
         token: &'static str,
         base_rules: String,
     ) -> Self {
-        let url = "https://api.openai.com/v1/chat/completions";
+        //let api_url = "https://api.openai.com/v1/chat/completions";
         let http_client = reqwest::Client::new();
 
         let messages = if base_rules.is_empty() {
@@ -119,9 +129,10 @@ impl GtpClient {
         GtpClient {
             token,
             model,
+            voice,
             smart_model,
             http_client,
-            chat_url: url,
+            chat_url: api_url,
             dalle_url: "https://api.openai.com/v1/images/generations",
             messages: Mutex::new(messages),
         }
@@ -132,14 +143,13 @@ impl GtpClient {
         value: Value,
         mode: ModelMode,
     ) -> Result<Arc<String>> {
-        let message = Message::User(value);
-        let messages = {
-            let mut messages = self.messages.lock().await;
-
-            messages.push(message);
-
+        let user_message = Message::User(value);
+        let mut messages = {
+            let messages = self.messages.lock().await;
             messages.clone()
         };
+
+        messages.push(user_message.clone());
 
         let model = match mode {
             ModelMode::Fast => self.model,
@@ -159,11 +169,13 @@ impl GtpClient {
             let mut completion = response.json::<Response>().await?;
             let choice = completion.choices.swap_remove(0);
             let result = Arc::new(choice.message.content);
-            let message = Message::Assistant(Value::Plain(result.clone()));
+            let assist_message =
+                Message::Assistant(Value::Plain(result.clone()));
 
             {
                 let mut messages = self.messages.lock().await;
-                messages.push(message);
+                messages.push(user_message);
+                messages.push(assist_message);
             }
 
             Ok(result)
@@ -217,7 +229,41 @@ impl GtpInteractor for GtpClient {
             let mut completion = response.json::<DalleResponse>().await?;
             let response = completion.data.remove(0);
 
+            let anwer_message = Message::User(Value::Complex(vec![
+                Content::Text {
+                    text: format!("По запросу '{prompt}' ты нарисовал:").into(),
+                },
+                Content::ImageUrl {
+                    image_url: response.clone(),
+                },
+            ]));
+
+            {
+                let mut messages = self.messages.lock().await;
+                messages.push(anwer_message);
+            }
+
             Ok(response.url)
+        } else {
+            bail!(response.text().await?)
+        }
+    }
+
+    async fn get_audio(&self, prompt: &str) -> Result<Vec<u8>> {
+        let request = AudioSpeechRequest::new("tts-1", prompt, self.voice);
+
+        let token = self.token;
+        let response = self
+            .http_client
+            .post("https://api.openai.com/v1/audio/speech")
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let audio = response.bytes().await?;
+            Ok(Vec::from(audio))
         } else {
             bail!(response.text().await?)
         }
@@ -235,4 +281,6 @@ pub trait GtpInteractor {
         image_url: String,
     ) -> Result<Arc<String>>;
     async fn get_image(&self, prompt: &str) -> Result<Arc<String>>;
+
+    async fn get_audio(&self, prompt: &str) -> Result<Vec<u8>>;
 }

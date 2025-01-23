@@ -78,18 +78,31 @@ async fn main() -> Result<(), Error> {
     let gtp_preamble = context_env!("GPT_PREAMBLE");
     let heartbeat_interval_seconds =
         std::env::var("HEARTBEAT_INTERVAL_SECONDS");
+    let voice = std::env::var("VOICE").unwrap_or("onyx".to_string()).leak();
     let mut tg_bot_allow_chats = Vec::new();
 
     for chat_id in context_env!("TG_ALLOW_CHATS").split(',') {
         tg_bot_allow_chats.push(chat_id.parse::<i64>()?);
     }
 
+    let api_url = std::env::var("GPT_CHAT_URL")
+        .map(|s| s.leak() as &'static str)
+        .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions");
+
     let tg_client = TgClient::new(tg_token);
-    let gtp_client =
-        GtpClient::new(gpt_model, gpt_smart_model, gpt_token, base_rules);
-    let private_gtp_client = GtpClient::new(
+    let gtp_client = GtpClient::new(
+        api_url,
         gpt_model,
         gpt_smart_model,
+        voice,
+        gpt_token,
+        base_rules,
+    );
+    let private_gtp_client = GtpClient::new(
+        api_url,
+        gpt_model,
+        gpt_smart_model,
+        voice,
         gpt_token,
         String::default(),
     );
