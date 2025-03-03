@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
+use base64::{engine::general_purpose, Engine as _};
 use derive_more::{Constructor, From};
 use futures::lock::Mutex;
 #[cfg(test)]
@@ -32,6 +33,12 @@ struct Url {
 enum Content {
     Text { text: Arc<String> },
     ImageUrl { image_url: Url },
+    ImageBase64 { image_url: Image },
+}
+
+#[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
+struct Image {
+    url: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -205,10 +212,31 @@ impl GtpInteractor for GtpClient {
         text: String,
         image_url: String,
     ) -> Result<Arc<String>> {
+        // Download the image from URL
+        let image_bytes = self
+            .http_client
+            .get(&image_url)
+            .send()
+            .await?
+            .bytes()
+            .await?;
+
+        // Convert to base64
+        let base64_image = general_purpose::STANDARD.encode(&image_bytes);
+
+        // Determine image format from URL or content
+        let format = if image_url.ends_with(".png") {
+            "png"
+        } else {
+            "jpeg" // Default to jpeg
+        };
+
+        let data_url = format!("data:image/{};base64,{}", format, base64_image);
+
         let value = Value::Complex(vec![
             Content::Text { text: text.into() },
-            Content::ImageUrl {
-                image_url: Arc::new(image_url).into(),
+            Content::ImageBase64 {
+                image_url: Image::new(data_url),
             },
         ]);
         self.get_value_completion(value, ModelMode::Fast).await

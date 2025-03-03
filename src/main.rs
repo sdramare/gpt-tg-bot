@@ -5,7 +5,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use color_eyre::owo_colors::OwoColorize;
 use dotenvy::dotenv;
 use lambda_http::Body::Empty;
 use lambda_http::{http, run, service_fn, Body, Error, Request, Response};
