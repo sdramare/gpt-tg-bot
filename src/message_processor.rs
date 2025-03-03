@@ -51,11 +51,12 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         message: Message,
     ) -> anyhow::Result<()> {
         let chat_id = message.chat.id;
+        let is_private = message.chat.is_private();
 
         let (tx, mut rx) = oneshot::channel::<usize>();
         let duration = self.config.message_delay;
 
-        let wait_loop = self.wait_loop(chat_id, duration, tx);
+        let wait_loop = self.wait_loop(chat_id, is_private, duration, tx);
 
         let process_task = async {
             let result = self.process_message_internal(message).await;
@@ -73,6 +74,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     async fn wait_loop(
         &self,
         chat_id: i64,
+        is_private: bool,
         duration: Duration,
         mut tx: oneshot::Sender<usize>,
     ) {
@@ -98,14 +100,16 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                     break;
                 },
                 _ = interval.tick() => {
-
+                    if !is_private {
+                        continue;
+                    }
                     let result = self.tg_client
                     .send_message(chat_id, "Погоди, надо еще подумать", None)
                     .await;
 
                     match result {
                         Ok(_) => {
-                            break;
+                            continue;
                         }
                         Err(e) => {
                             error!(?e);
@@ -264,7 +268,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                     return Ok(());
                 }
             }
-        }
+        }       
 
         self.tg_client
             .send_message(chat.id, &result, "MarkdownV2".into())
@@ -333,7 +337,8 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                 return Ok(());
             };
 
-            info!("Photo request");
+            let file_id = &photo.file_id;
+            info!(?file_id, "photo request");
             let photo_url = self.tg_client.get_file_url(&photo.file_id).await?;
 
             let result = self

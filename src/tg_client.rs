@@ -214,7 +214,7 @@ impl TgClient {
             let chunk = &result_text[i..j];
             let res = self.send_text(chat_id, chunk, parse_mode).await;
             if res.is_err() {
-                j -= 1;
+                j -= 2;
                 let chunk = &result_text[i..j];
                 self.send_text(chat_id, chunk, parse_mode).await?;
             }

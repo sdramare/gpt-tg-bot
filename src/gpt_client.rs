@@ -89,6 +89,7 @@ struct DalleRequest<'a> {
     prompt: &'a str,
     n: i32,
     size: &'static str,
+    quality: &'static str,
 }
 
 #[derive(Debug, Deserialize, Constructor)]
@@ -132,8 +133,8 @@ impl GtpClient {
             voice,
             smart_model,
             http_client,
-            chat_url: api_url,
-            dalle_url: "https://api.openai.com/v1/images/generations",
+            chat_url: format!("{}/chat/completions", &api_url).leak(),
+            dalle_url: format!("{}/images/generations", &api_url).leak(),
             messages: Mutex::new(messages),
         }
     }
@@ -214,7 +215,7 @@ impl GtpInteractor for GtpClient {
     }
     async fn get_image(&self, prompt: &str) -> Result<Arc<String>> {
         let dalle_request =
-            DalleRequest::new("dall-e-3", prompt, 1, "1024x1024");
+            DalleRequest::new("dall-e-3", prompt, 1, "1024x1024", "hd");
 
         let token = self.token;
         let response = self

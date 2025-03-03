@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use color_eyre::owo_colors::OwoColorize;
 use dotenvy::dotenv;
 use lambda_http::Body::Empty;
 use lambda_http::{http, run, service_fn, Body, Error, Request, Response};
@@ -57,14 +58,19 @@ async fn main() -> Result<(), Error> {
         dotenv()?;
     }
 
-    tracing_subscriber::fmt()
-        .json()
-        .with_max_level(tracing::Level::INFO)
-        // disable printing the name of the module in every log line.
-        .with_target(false)
-        // disabling time is handy because CloudWatch will add the ingestion time.
-        .without_time()
-        .init();
+    if cfg!(debug_assertions) {
+        color_eyre::install()?;
+        tracing_subscriber::fmt().pretty().init();
+    } else {
+        tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            // disable printing the name of the module in every log line.
+            .with_target(false)
+            // disabling time is handy because CloudWatch will add the ingestion time.
+            .without_time()
+            .init();
+    }
 
     let tg_bot_names = context_env!("BOT_ALIAS").leak().split(',').collect();
     let dummy_answers =
@@ -89,6 +95,18 @@ async fn main() -> Result<(), Error> {
         .map(|s| s.leak() as &'static str)
         .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions");
 
+    let private_api_url = std::env::var("GPT_PRIVATE_CHAT_URL")
+        .map(|s| s.leak() as &'static str)
+        .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions");
+
+    let private_model = std::env::var("GPT_PRIVATE_MODEL")
+        .map(|s| s.leak() as &'static str)
+        .unwrap_or(gpt_model);
+
+    let private_token = std::env::var("GPT_PRIVATE_TOKEN")
+        .map(|s| s.leak() as &'static str)
+        .unwrap_or(gpt_token);
+
     let tg_client = TgClient::new(tg_token);
     let gtp_client = GtpClient::new(
         api_url,
@@ -99,11 +117,11 @@ async fn main() -> Result<(), Error> {
         base_rules,
     );
     let private_gtp_client = GtpClient::new(
-        api_url,
-        gpt_model,
+        private_api_url,
+        private_model,
         gpt_smart_model,
         voice,
-        gpt_token,
+        private_token,
         String::default(),
     );
     let names_map = context_env!("NAMES_MAP");
