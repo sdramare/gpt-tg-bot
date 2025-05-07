@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use chrono::Utc;
 use derive_more::Constructor;
 use derive_new::new;
 use dyn_fmt::AsStrFormatExt;
 use lambda_http::{Request, RequestPayloadExt};
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::SliceRandom;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
-use tracing::{error, info, span, warn, Instrument, Span};
+use tracing::{Instrument, error, info, span, warn};
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpInteractor;
 use crate::tg_client::{
-    Chat, Message, TelegramInteractor, Update, PRIVATE_CHAT,
+    Chat, Message, PRIVATE_CHAT, TelegramInteractor, Update,
 };
 
 const DRAW_COMMAND: &str = "нарисуй";
@@ -164,29 +164,34 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                     user_name = first_name
                 );
 
-                let _enter = span.enter();
+                async move {
+                    let result = self
+                        .process_and_answer(&message.chat, &text, &first_name)
+                        .in_current_span()
+                        .await
+                        .with_context(|| format!("process message: {text}"));
 
-                let result = self
-                    .process_and_answer(&message.chat, &text, &first_name)
-                    .await;
-
-                if let Err(error) = result {
-                    if message.chat.is_private() {
-                        let error_message = format!("```\n{}\n```", &error);
-                        self.tg_client
-                            .send_message(
-                                message.chat.id,
-                                &error_message,
-                                "MarkdownV2".into(),
-                            )
-                            .await?;
-                        return Err(error);
+                    if let Err(error) = result {
+                        if message.chat.is_private() {
+                            let error_message =
+                                format!("```\n{:?}\n```", &error);
+                            self.tg_client
+                                .send_message(
+                                    message.chat.id,
+                                    &error_message,
+                                    "MarkdownV2".into(),
+                                )
+                                .in_current_span()
+                                .await?;
+                            return Err(error);
+                        }
                     }
+
+                    info!("Complete");
+                    Ok(())
                 }
-
-                info!("Complete");
-
-                drop(_enter)
+                .instrument(span)
+                .await?
             }
         }
 
@@ -200,12 +205,16 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         first_name: &str,
     ) -> anyhow::Result<()> {
         if let Some(index) = text.to_lowercase().find(DRAW_COMMAND) {
-            self.process_image_request(text, &index, chat).await?;
+            self.process_image_request(text, &index, chat)
+                .in_current_span()
+                .await?;
 
             return Ok(());
         }
 
-        self.process_text_message(text, first_name, chat).await?;
+        self.process_text_message(text, first_name, chat)
+            .in_current_span()
+            .await?;
 
         Ok(())
     }
@@ -232,12 +241,12 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             info!("Smart completion");
             self.gtp_client(chat)
                 .get_smart_completion(text)
-                .instrument(Span::current())
+                .in_current_span()
                 .await?
         } else {
             self.gtp_client(chat)
                 .get_completion(text)
-                .instrument(Span::current())
+                .in_current_span()
                 .await?
         };
 
@@ -251,16 +260,27 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             {
                 let num = self.get_random_number();
                 if num < 20 {
-                    self.tg_client.leave_chat(chat.id).await?;
+                    self.tg_client
+                        .leave_chat(chat.id)
+                        .in_current_span()
+                        .await?;
                     return Ok(());
                 }
             }
 
             let num = self.get_random_number();
             if num > 100 {
-                let audio = self.gtp_client(chat).get_audio(&result).await?;
+                let audio = self
+                    .gtp_client(chat)
+                    .get_audio(&result)
+                    .in_current_span()
+                    .await?;
 
-                let res = self.tg_client.send_voice(chat.id, audio).await;
+                let res = self
+                    .tg_client
+                    .send_voice(chat.id, audio)
+                    .in_current_span()
+                    .await;
 
                 if let Err(err) = res {
                     warn!(?err);
@@ -268,10 +288,11 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                     return Ok(());
                 }
             }
-        }       
+        }
 
         self.tg_client
             .send_message(chat.id, &result, "MarkdownV2".into())
+            .in_current_span()
             .await?;
 
         Ok(())
@@ -341,11 +362,18 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             info!(?file_id, "photo request");
             let photo_url = self.tg_client.get_file_url(&photo.file_id).await?;
 
-            let result = self
-                .gtp_client(&message.chat)
-                .get_image_completion(text, photo_url)
-                .instrument(Span::current())
-                .await;
+            let result = if message.chat.is_private()
+                && contains_case_insensitive(&text, "подумай")
+            {
+                info!("Smart completion");
+                self.gtp_client(&message.chat)
+                    .get_image_smart_completion(text, photo_url)
+                    .await
+            } else {
+                self.gtp_client(&message.chat)
+                    .get_image_completion(text, photo_url)
+                    .await
+            };
 
             info!("Sending answer to TG");
 
@@ -357,18 +385,27 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                             result.as_str(),
                             "MarkdownV2".into(),
                         )
-                        .instrument(Span::current())
                         .await?;
                 }
                 Err(error) => {
-                    self.tg_client
-                        .send_message(
-                            message.chat.id,
-                            "Прости, я задумался. Можешь повторить?",
-                            "MarkdownV2".into(),
-                        )
-                        .instrument(Span::current())
-                        .await?;
+                    if message.chat.is_private() {
+                        let error_message = format!("```\n{}\n```", &error);
+                        self.tg_client
+                            .send_message(
+                                message.chat.id,
+                                &error_message,
+                                "MarkdownV2".into(),
+                            )
+                            .await?;
+                    } else {
+                        self.tg_client
+                            .send_message(
+                                message.chat.id,
+                                "Прости, я задумался. Можешь повторить?",
+                                "MarkdownV2".into(),
+                            )
+                            .await?;
+                    }
 
                     bail!(error)
                 }
@@ -511,10 +548,10 @@ mod tests {
     use crate::gpt_client::MockGtpInteractor;
     use crate::message_processor::contains_case_insensitive;
     use crate::tg_client::{
-        Chat, Message, MockTelegramInteractor, PhotoSize, User, PRIVATE_CHAT,
+        Chat, Message, MockTelegramInteractor, PRIVATE_CHAT, PhotoSize, User,
     };
 
-    use super::{should_answer, Config, TgBot};
+    use super::{Config, TgBot, should_answer};
 
     #[test]
     fn test_contains_case_insensitive() {

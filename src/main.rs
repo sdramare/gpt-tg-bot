@@ -27,7 +27,7 @@ async fn function_handler(
     if let Err(error) = tg_bot.process_event(&event).await {
         let body = get_request_body(event.body());
         let backtrace = Backtrace::force_capture();
-        error!({ ?body, ?backtrace, ?error }, "Error in request handler");
+        error!({ ?body, ?backtrace, error = format!("{:?}", error) }, "Error in request handler");
     };
 
     let resp = Response::builder()

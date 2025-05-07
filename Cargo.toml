@@ -1,7 +1,7 @@
 [package]
 name = "gpt-tg-bot"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # Starting in Rust 1.62 you can use `cargo add` to add dependencies 
 # to your project.
@@ -16,6 +16,7 @@ edition = "2021"
 
 [dev-dependencies]
 mockall = "0.13.0"
+wiremock = "0.5"
 
 [dependencies]
 lambda_http = "0.13.0"
