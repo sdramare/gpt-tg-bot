@@ -542,7 +542,7 @@ mod tests {
     use std::collections::HashMap;
 
     use chrono::Utc;
-    use mockall::predicate::eq;
+    use mockall::predicate::{always, eq};
     use rand::rngs::mock::StepRng;
 
     use crate::gpt_client::MockGtpInteractor;
@@ -744,11 +744,11 @@ mod tests {
             .times(1)
             .returning(|_| Ok("url".to_string().into()));
 
-        /*  tg_client
-        .expect_send_image()
-        .with(eq(123), eq("url"))
-        .times(1)
-        .returning(|_, _| Ok(())); */
+        tg_client
+            .expect_send_image()
+            .with(eq(123), always())
+            .times(1)
+            .returning(|_, _| Ok(()));
 
         let bot = create_bot(tg_client, gtp_client, public_gtp_client);
         let message =

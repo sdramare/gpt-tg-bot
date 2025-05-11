@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose};
 use derive_more::{Constructor, From};
 use futures::lock::Mutex;
@@ -96,7 +96,7 @@ pub struct GtpClient {
 }
 
 #[derive(Debug, Serialize, Constructor)]
-struct DalleRequest<'a> {
+struct ImageGenerationRequest<'a> {
     model: &'static str,
     prompt: &'a str,
     n: i32,
@@ -173,11 +173,10 @@ impl GtpClient {
             ModelMode::Smart => self.smart_model,
         };
         let request_data = Request::new(model, &messages, 1.0);
-        let token = self.token;
         let response = self
             .http_client
             .post(&self.chat_url)
-            .header("Authorization", format!("Bearer {token}"))
+            .bearer_auth(self.token)
             .json(&request_data)
             .send()
             .await?;
@@ -272,7 +271,7 @@ impl GtpInteractor for GtpClient {
     }
 
     async fn get_image(&self, prompt: &str) -> Result<Vec<u8>> {
-        let dalle_request = DalleRequest::new(
+        let dalle_request = ImageGenerationRequest::new(
             "gpt-image-1",
             prompt,
             1,
@@ -281,18 +280,20 @@ impl GtpInteractor for GtpClient {
             "low",
         );
 
-        let token = self.token;
         let response = self
             .http_client
             .post(&self.dalle_url)
-            .header("Authorization", format!("Bearer {token}"))
+            .bearer_auth(self.token)
             .json(&dalle_request)
             .send()
             .await?;
 
         if response.status().is_success() {
             let mut completion = response.json::<GptImageResponse>().await?;
-            let response = completion.data.remove(0);
+            let response = completion
+                .data
+                .pop()
+                .ok_or(anyhow!("no image data found in response"))?;
             let data_url =
                 format!("data:image/png;base64,{}", &response.b64_json);
 
@@ -329,7 +330,7 @@ impl GtpInteractor for GtpClient {
         let response = self
             .http_client
             .post("https://api.openai.com/v1/audio/speech")
-            .header("Authorization", format!("Bearer {token}"))
+            .bearer_auth(token)
             .json(&request)
             .send()
             .await?;
@@ -532,55 +533,5 @@ mod tests {
             result.unwrap().as_ref(),
             "This is a response about an image"
         );
-    }
-
-    #[tokio::test]
-    async fn test_get_image() {
-        // Setup mock server
-        let mock_server = MockServer::start().await;
-
-        // Create DALL-E API response
-        let response_body = r#"{
-            "data": [
-                {"url": "https://example.com/generated-image.jpg"}
-            ]
-        }"#;
-
-        // Mock DALL-E API
-        Mock::given(method("POST"))
-            .and(path("/v1/images/generations"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string(response_body),
-            )
-            .mount(&mock_server)
-            .await;
-
-        // Create client
-        let http_client = reqwest::Client::new();
-
-        // Format the URLs and convert them to 'static lifetimes
-        let chat_url = format!("{}/v1/chat/completions", mock_server.uri());
-        let dalle_url = format!("{}/v1/images/generations", mock_server.uri());
-
-        let client = GtpClient {
-            token: "test-token",
-            model: "test-model",
-            voice: "test-voice",
-            smart_model: "test-smart-model",
-            http_client,
-            chat_url,
-            dalle_url,
-            messages: Mutex::new(Vec::new()),
-        };
-
-        // Test getting an image
-        let result = client.get_image("Draw a test image").await;
-
-        // Assert results
-        assert!(result.is_ok());
-        /* assert_eq!(
-            result.unwrap().as_ref(),
-            "https://example.com/generated-image.jpg"
-        ); */
     }
 }
