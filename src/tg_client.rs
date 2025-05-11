@@ -1,15 +1,15 @@
 use std::time::Duration;
 
-use anyhow::{bail, Result};
-use chrono::naive::serde::ts_seconds::deserialize as from_ts;
+use anyhow::{Result, bail};
 use chrono::NaiveDateTime;
+use chrono::naive::serde::ts_seconds::deserialize as from_ts;
 use derive_more::Constructor;
 #[cfg(test)]
 use mockall::automock;
 use reqwest::multipart;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::RetryTransientMiddleware;
+use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -98,12 +98,6 @@ struct TgMessageRequest<'a> {
     text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     parse_mode: Option<&'static str>,
-}
-
-#[derive(Debug, Constructor, Serialize)]
-struct TgMessageImageRequest<'a> {
-    chat_id: i64,
-    photo: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,21 +243,24 @@ impl TelegramInteractor for TgClient {
         Ok(())
     }
 
-    async fn send_image(&self, chat_id: i64, url: &str) -> Result<()> {
-        let request_data = TgMessageImageRequest::new(chat_id, url);
+    async fn send_image(&self, chat_id: i64, image: Vec<u8>) -> Result<()> {
+        let part = multipart::Part::bytes(image)
+            .file_name("image.png")
+            .mime_str("image/png")?;
+        let form = multipart::Form::new()
+            .text("chat_id", chat_id.to_string())
+            .part("photo", part);
 
-        let response = self
-            .http_client
+        let response = reqwest::Client::new()
             .post(&self.send_image_url)
-            .json(&request_data)
+            .multipart(form)
             .send()
             .await?;
 
         if !response.status().is_success() {
             let error = format!(
-                "Telegram send error. Error: {}. Request {}",
-                response.text().await?,
-                request_data.photo
+                "Telegram send error. Error: {}.",
+                response.text().await?
             );
             bail!(error);
         }
@@ -354,7 +351,7 @@ pub trait TelegramInteractor: Send + Sync {
         text: &str,
         parse_mode: Option<&'static str>,
     ) -> Result<()>;
-    async fn send_image(&self, chat_id: i64, url: &str) -> Result<()>;
+    async fn send_image(&self, chat_id: i64, image: Vec<u8>) -> Result<()>;
     async fn send_voice(&self, chat_id: i64, audio: Vec<u8>) -> Result<()>;
     async fn leave_chat(&self, chat_id: i64) -> Result<()>;
 }
