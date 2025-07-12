@@ -66,9 +66,9 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             result
         };
 
-        let (_, result) = tokio::join!(wait_loop, process_task);
+        tokio::try_join!(wait_loop, process_task)?;
 
-        result
+        Ok(())
     }
 
     async fn wait_loop(
@@ -77,7 +77,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         is_private: bool,
         duration: Duration,
         mut tx: oneshot::Sender<usize>,
-    ) {
+    ) -> anyhow::Result<()> {
         let start = Instant::now() + duration;
 
         let timeout = tokio::time::sleep(duration * 10);
@@ -93,8 +93,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                     let _ = self.tg_client
                     .send_message(chat_id, "Я не знаю что на это ответить", None)
                     .await;
-
-                    break;
+                    return Err(anyhow::anyhow!("Response timeout"));
                 },
                 _ = tx.closed() => {
                     break;
@@ -118,6 +117,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                 }
             }
         }
+        Ok(())
     }
 
     async fn process_message_internal(
@@ -171,20 +171,19 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                         .await
                         .with_context(|| format!("process message: {text}"));
 
-                    if let Err(error) = result {
-                        if message.chat.is_private() {
-                            let error_message =
-                                format!("```\n{:?}\n```", &error);
-                            self.tg_client
-                                .send_message(
-                                    message.chat.id,
-                                    &error_message,
-                                    "MarkdownV2".into(),
-                                )
-                                .in_current_span()
-                                .await?;
-                            return Err(error);
-                        }
+                    if let Err(error) = result
+                        && message.chat.is_private()
+                    {
+                        let error_message = format!("```\n{:?}\n```", &error);
+                        self.tg_client
+                            .send_message(
+                                message.chat.id,
+                                &error_message,
+                                "MarkdownV2".into(),
+                            )
+                            .in_current_span()
+                            .await?;
+                        return Err(error);
                     }
 
                     info!("Complete");
