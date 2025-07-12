@@ -183,7 +183,7 @@ impl TgClient {
                 "Telegram send error. Error: {}. Request {}",
                 tg_error, request_data.text
             );
-            let error = format!("Telegram send error. Error: {}", tg_error);
+            let error = format!("Telegram send error. Error: {tg_error}");
             bail!(error);
         }
         Ok(())
