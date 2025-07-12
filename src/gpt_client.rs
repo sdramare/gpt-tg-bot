@@ -3,10 +3,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose};
 use derive_more::{Constructor, From};
-use futures::lock::Mutex;
 #[cfg(test)]
 use mockall::automock;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Serialize, Constructor)]
 struct Request<'a> {
@@ -92,7 +92,7 @@ pub struct GtpClient {
     http_client: reqwest::Client,
     chat_url: String,
     dalle_url: String,
-    messages: Mutex<Vec<Message>>,
+    messages: RwLock<Vec<Message>>,
 }
 
 #[derive(Debug, Serialize, Constructor)]
@@ -151,7 +151,7 @@ impl GtpClient {
             http_client,
             chat_url: format!("{}/chat/completions", &api_url),
             dalle_url: format!("{}/images/generations", &api_url),
-            messages: Mutex::new(messages),
+            messages: RwLock::new(messages),
         }
     }
 
@@ -162,7 +162,7 @@ impl GtpClient {
     ) -> Result<Arc<String>> {
         let user_message = Message::User(value);
         let mut messages = {
-            let messages = self.messages.lock().await;
+            let messages = self.messages.read().await;
             messages.clone()
         };
 
@@ -189,7 +189,7 @@ impl GtpClient {
                 Message::Assistant(Value::Plain(result.clone()));
 
             {
-                let mut messages = self.messages.lock().await;
+                let mut messages = self.messages.write().await;
                 messages.push(user_message);
                 messages.push(assist_message);
             }
@@ -226,7 +226,7 @@ impl GtpClient {
             "jpeg" // Default to jpeg
         };
 
-        let data_url = format!("data:image/{};base64,{}", format, base64_image);
+        let data_url = format!("data:image/{format};base64,{base64_image}");
 
         let value = Value::Complex(vec![
             Content::Text { text: text.into() },
@@ -307,7 +307,7 @@ impl GtpInteractor for GtpClient {
             ]));
 
             {
-                let mut messages = self.messages.lock().await;
+                let mut messages = self.messages.write().await;
                 messages.push(anwer_message);
             }
 
@@ -424,7 +424,7 @@ mod tests {
             http_client,
             chat_url,
             dalle_url,
-            messages: Mutex::new(Vec::new()),
+            messages: RwLock::new(Vec::new()),
         };
 
         // Test the get_completion method
@@ -518,7 +518,7 @@ mod tests {
             http_client,
             chat_url,
             dalle_url,
-            messages: Mutex::new(Vec::new()),
+            messages: RwLock::new(Vec::new()),
         };
 
         // Test the image completion with our image URL
