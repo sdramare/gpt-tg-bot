@@ -196,7 +196,10 @@ impl GtpClient {
                 Message::Assistant(Value::Plain(result.clone()));
 
             {
-                let mut messages = self.messages.entry(user_id).or_default();
+                let mut messages = self
+                    .messages
+                    .entry(user_id)
+                    .or_insert_with(|| self.base_rules.clone());
                 messages.push(user_message);
                 messages.push(assist_message);
             }
