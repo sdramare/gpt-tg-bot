@@ -476,6 +476,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_completion_with_rules() {
+        // Setup mock server
+        let mock_server = MockServer::start().await;
+
+        // Create a response body that matches the expected structure
+        let response_body = r#"{
+            "id": "test-id",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "This is a test response"
+                    },
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30
+            }
+        }"#;
+
+        struct BodyContainsMatcher {
+            expected_content: String,
+        }
+
+        impl wiremock::Match for BodyContainsMatcher {
+            fn matches(&self, request: &wiremock::Request) -> bool {
+                // Convert the body to a string and check if it contains our expected base64
+                let body_str = String::from_utf8_lossy(&request.body);
+                body_str.contains(&self.expected_content)
+            }
+        }
+
+        let rules = "base rule - be good".to_string();
+
+        // Configure the mock to return our response for chat completions
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(BodyContainsMatcher {
+                expected_content: rules.clone(),
+            })
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(response_body),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Format the URLs and convert them to 'static lifetimes
+        let api_url = format!("{}/v1", mock_server.uri());
+
+        let client = GtpClient::new(
+            api_url.leak(),
+            "test-model",
+            "test-smart-model",
+            "test-voice",
+            "test-token",
+            rules,
+        );
+
+        // Test the get_completion method
+        let result = client.get_completion(0, "Test prompt".to_string()).await;
+
+        // Assert the result is as expected
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_ref(), "This is a test response");
+
+        let result = client.get_completion(0, "Test prompt".to_string()).await;
+
+        // Assert the result is as expected
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_ref(), "This is a test response");
+    }
+
+    #[tokio::test]
     async fn test_get_image_completion() {
         // Setup mock servers
         let mock_server = MockServer::start().await;
