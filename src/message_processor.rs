@@ -239,12 +239,12 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         {
             info!("Smart completion");
             self.gtp_client(chat)
-                .get_smart_completion(text)
+                .get_smart_completion(chat.id, text)
                 .in_current_span()
                 .await?
         } else {
             self.gtp_client(chat)
-                .get_completion(text)
+                .get_completion(chat.id, text)
                 .in_current_span()
                 .await?
         };
@@ -307,7 +307,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
         info!("Image request");
 
-        let image_data = self.gtp_client(chat).get_image(text).await;
+        let image_data = self.gtp_client(chat).get_image(chat.id, text).await;
 
         match image_data {
             Ok(image_data) => {
@@ -366,11 +366,15 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             {
                 info!("Smart completion");
                 self.gtp_client(&message.chat)
-                    .get_image_smart_completion(text, photo_url)
+                    .get_image_smart_completion(
+                        message.chat.id,
+                        text,
+                        photo_url,
+                    )
                     .await
             } else {
                 self.gtp_client(&message.chat)
-                    .get_image_completion(text, photo_url)
+                    .get_image_completion(message.chat.id, text, photo_url)
                     .await
             };
 
@@ -611,8 +615,8 @@ mod tests {
         public_gtp_client
             .expect_get_completion()
             .times(1)
-            .with(eq("Call me Bob.  Hello".to_string()))
-            .returning(|_| Ok("How are you?".to_string().into()));
+            .with(eq(0), eq("Call me Bob.  Hello".to_string()))
+            .returning(|_, _| Ok("How are you?".to_string().into()));
 
         tg_client
             .expect_send_message()
@@ -661,8 +665,12 @@ mod tests {
         gtp_client
             .expect_get_image_completion()
             .times(1)
-            .with(eq("Что на картинке?".to_string()), eq("url".to_string()))
-            .returning(|_, _| Ok("Red image".to_string().into()));
+            .with(
+                eq(123),
+                eq("Что на картинке?".to_string()),
+                eq("url".to_string()),
+            )
+            .returning(|_, _, _| Ok("Red image".to_string().into()));
 
         tg_client
             .expect_send_message()
@@ -713,9 +721,9 @@ mod tests {
 
         public_gtp_client
             .expect_get_completion()
-            .with(eq("preamble Hello".to_string()))
+            .with(eq(123), eq("preamble Hello".to_string()))
             .times(1)
-            .returning(|_| Ok("Hello Sir".to_string().into()));
+            .returning(|_, _| Ok("Hello Sir".to_string().into()));
 
         tg_client
             .expect_send_message()
@@ -739,9 +747,9 @@ mod tests {
 
         gtp_client
             .expect_get_image()
-            .with(eq(" cat"))
+            .with(eq(123), eq(" cat"))
             .times(1)
-            .returning(|_| Ok("url".to_string().into()));
+            .returning(|_, _| Ok("url".to_string().into()));
 
         tg_client
             .expect_send_image()
@@ -765,9 +773,9 @@ mod tests {
 
         public_gtp_client
             .expect_get_completion()
-            .with(eq("preamble Hello".to_string()))
+            .with(eq(123), eq("preamble Hello".to_string()))
             .times(1)
-            .returning(|_| Ok("Hello Sir".to_string().into()));
+            .returning(|_, _| Ok("Hello Sir".to_string().into()));
 
         tg_client
             .expect_send_message()

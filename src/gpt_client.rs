@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose};
+use dashmap::DashMap;
 use derive_more::{Constructor, From};
 #[cfg(test)]
 use mockall::automock;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 
 #[derive(Debug, Serialize, Constructor)]
 struct Request<'a> {
@@ -92,7 +92,8 @@ pub struct GtpClient {
     http_client: reqwest::Client,
     chat_url: String,
     dalle_url: String,
-    messages: RwLock<Vec<Message>>,
+    messages: DashMap<i64, Vec<Message>>,
+    base_rules: Vec<Message>,
 }
 
 #[derive(Debug, Serialize, Constructor)]
@@ -137,7 +138,7 @@ impl GtpClient {
         //let api_url = "https://api.openai.com/v1/chat/completions";
         let http_client = reqwest::Client::new();
 
-        let messages = if base_rules.is_empty() {
+        let base_rules = if base_rules.is_empty() {
             Vec::new()
         } else {
             vec![Message::System(Value::Plain(base_rules.into()))]
@@ -151,19 +152,25 @@ impl GtpClient {
             http_client,
             chat_url: format!("{}/chat/completions", &api_url),
             dalle_url: format!("{}/images/generations", &api_url),
-            messages: RwLock::new(messages),
+            messages: DashMap::new(),
+            base_rules,
         }
     }
 
     async fn get_value_completion(
         &self,
+        user_id: i64,
         value: Value,
         mode: ModelMode,
     ) -> Result<Arc<String>> {
         let user_message = Message::User(value);
         let mut messages = {
-            let messages = self.messages.read().await;
-            messages.clone()
+            let user_chat = self.messages.get(&user_id);
+
+            match user_chat {
+                Some(chat) => chat.clone(),
+                None => self.base_rules.clone(),
+            }
         };
 
         messages.push(user_message.clone());
@@ -189,7 +196,7 @@ impl GtpClient {
                 Message::Assistant(Value::Plain(result.clone()));
 
             {
-                let mut messages = self.messages.write().await;
+                let mut messages = self.messages.entry(user_id).or_default();
                 messages.push(user_message);
                 messages.push(assist_message);
             }
@@ -239,38 +246,55 @@ impl GtpClient {
 }
 
 impl GtpInteractor for GtpClient {
-    async fn get_completion(&self, prompt: String) -> Result<Arc<String>> {
-        self.get_value_completion(Value::Plain(prompt.into()), ModelMode::Fast)
-            .await
+    async fn get_completion(
+        &self,
+        user_id: i64,
+        prompt: String,
+    ) -> Result<Arc<String>> {
+        self.get_value_completion(
+            user_id,
+            Value::Plain(prompt.into()),
+            ModelMode::Fast,
+        )
+        .await
     }
 
     async fn get_smart_completion(
         &self,
+        user_id: i64,
         prompt: String,
     ) -> Result<Arc<String>> {
-        self.get_value_completion(Value::Plain(prompt.into()), ModelMode::Smart)
-            .await
+        self.get_value_completion(
+            user_id,
+            Value::Plain(prompt.into()),
+            ModelMode::Smart,
+        )
+        .await
     }
 
     async fn get_image_completion(
         &self,
+        user_id: i64,
         text: String,
         image_url: String,
     ) -> Result<Arc<String>> {
         let value = self.get_image_value(text, image_url).await?;
-        self.get_value_completion(value, ModelMode::Fast).await
+        self.get_value_completion(user_id, value, ModelMode::Fast)
+            .await
     }
 
     async fn get_image_smart_completion(
         &self,
+        user_id: i64,
         text: String,
         image_url: String,
     ) -> Result<Arc<String>> {
         let value = self.get_image_value(text, image_url).await?;
-        self.get_value_completion(value, ModelMode::Smart).await
+        self.get_value_completion(user_id, value, ModelMode::Smart)
+            .await
     }
 
-    async fn get_image(&self, prompt: &str) -> Result<Vec<u8>> {
+    async fn get_image(&self, user_id: i64, prompt: &str) -> Result<Vec<u8>> {
         let dalle_request = ImageGenerationRequest::new(
             "gpt-image-1",
             prompt,
@@ -307,7 +331,10 @@ impl GtpInteractor for GtpClient {
             ]));
 
             {
-                let mut messages = self.messages.write().await;
+                let mut messages = self
+                    .messages
+                    .entry(user_id)
+                    .or_insert_with(|| self.base_rules.clone());
                 messages.push(anwer_message);
             }
 
@@ -346,22 +373,31 @@ impl GtpInteractor for GtpClient {
 
 #[cfg_attr(test, automock)]
 pub trait GtpInteractor {
-    async fn get_completion(&self, prompt: String) -> Result<Arc<String>>;
-    async fn get_smart_completion(&self, prompt: String)
-    -> Result<Arc<String>>;
+    async fn get_completion(
+        &self,
+        user_id: i64,
+        prompt: String,
+    ) -> Result<Arc<String>>;
+    async fn get_smart_completion(
+        &self,
+        user_id: i64,
+        prompt: String,
+    ) -> Result<Arc<String>>;
     async fn get_image_completion(
         &self,
+        user_id: i64,
         text: String,
         image_url: String,
     ) -> Result<Arc<String>>;
 
     async fn get_image_smart_completion(
         &self,
+        user_id: i64,
         text: String,
         image_url: String,
     ) -> Result<Arc<String>>;
 
-    async fn get_image(&self, prompt: &str) -> Result<Vec<u8>>;
+    async fn get_image(&self, user_id: i64, prompt: &str) -> Result<Vec<u8>>;
 
     async fn get_audio(&self, prompt: &str) -> Result<Vec<u8>>;
 }
@@ -424,11 +460,12 @@ mod tests {
             http_client,
             chat_url,
             dalle_url,
-            messages: RwLock::new(Vec::new()),
+            messages: DashMap::new(),
+            base_rules: Vec::new(),
         };
 
         // Test the get_completion method
-        let result = client.get_completion("Test prompt".to_string()).await;
+        let result = client.get_completion(0, "Test prompt".to_string()).await;
 
         // Assert the result is as expected
         assert!(result.is_ok());
@@ -518,13 +555,18 @@ mod tests {
             http_client,
             chat_url,
             dalle_url,
-            messages: RwLock::new(Vec::new()),
+            messages: DashMap::new(),
+            base_rules: Vec::new(),
         };
 
         // Test the image completion with our image URL
         let image_url = format!("{}/test.jpg", image_server.uri());
         let result = client
-            .get_image_completion("Describe this image".to_string(), image_url)
+            .get_image_completion(
+                0,
+                "Describe this image".to_string(),
+                image_url,
+            )
             .await;
 
         // Assert the results
