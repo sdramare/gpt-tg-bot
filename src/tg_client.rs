@@ -205,6 +205,9 @@ impl TgClient {
                 j = len;
             };
 
+            while !result_text.is_char_boundary(j) && j > i {
+                j -= 1;
+            }
             let chunk = &result_text[i..j];
             let res = self.send_text(chat_id, chunk, parse_mode).await;
             if res.is_err() {
@@ -212,7 +215,7 @@ impl TgClient {
                 let chunk = &result_text[i..j];
                 self.send_text(chat_id, chunk, parse_mode).await?;
             }
-            i += MAX_MSG_SIZE;
+            i = j;
         }
         Ok(())
     }

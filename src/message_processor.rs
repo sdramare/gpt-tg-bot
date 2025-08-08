@@ -385,7 +385,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                     self.tg_client
                         .send_message(
                             message.chat.id,
-                            result.as_str(),
+                            &result,
                             "MarkdownV2".into(),
                         )
                         .await?;

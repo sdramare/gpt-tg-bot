@@ -8,6 +8,8 @@ use derive_more::{Constructor, From};
 use mockall::automock;
 use serde::{Deserialize, Serialize};
 
+type AStr = Arc<str>;
+
 #[derive(Debug, Serialize, Constructor)]
 struct Request<'a> {
     model: &'a str,
@@ -25,19 +27,19 @@ enum Message {
 
 #[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
 struct Url {
-    url: Arc<String>,
+    url: AStr,
 }
 
 #[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
 #[serde(rename_all = "snake_case")]
 struct Base64Image {
-    b64_json: Arc<String>,
+    b64_json: AStr,
 }
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Content {
-    Text { text: Arc<String> },
+    Text { text: AStr },
     ImageUrl { image_url: Url },
 }
 
@@ -49,7 +51,7 @@ struct Image {
 #[derive(Debug, Serialize, Clone)]
 #[serde(untagged)]
 enum Value {
-    Plain(Arc<String>),
+    Plain(AStr),
     Complex(Vec<Content>),
 }
 
@@ -162,7 +164,7 @@ impl GtpClient {
         user_id: i64,
         value: Value,
         mode: ModelMode,
-    ) -> Result<Arc<String>> {
+    ) -> Result<AStr> {
         let user_message = Message::User(value);
         let mut messages = {
             let user_chat = self.messages.get(&user_id);
@@ -191,7 +193,7 @@ impl GtpClient {
         if response.status().is_success() {
             let mut completion = response.json::<Response>().await?;
             let choice = completion.choices.swap_remove(0);
-            let result = Arc::new(choice.message.content);
+            let result: AStr = choice.message.content.into();
             let assist_message =
                 Message::Assistant(Value::Plain(result.clone()));
 
@@ -253,7 +255,7 @@ impl GtpInteractor for GtpClient {
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<Arc<String>> {
+    ) -> Result<AStr> {
         self.get_value_completion(
             user_id,
             Value::Plain(prompt.into()),
@@ -266,7 +268,7 @@ impl GtpInteractor for GtpClient {
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<Arc<String>> {
+    ) -> Result<AStr> {
         self.get_value_completion(
             user_id,
             Value::Plain(prompt.into()),
@@ -280,7 +282,7 @@ impl GtpInteractor for GtpClient {
         user_id: i64,
         text: String,
         image_url: String,
-    ) -> Result<Arc<String>> {
+    ) -> Result<AStr> {
         let value = self.get_image_value(text, image_url).await?;
         self.get_value_completion(user_id, value, ModelMode::Fast)
             .await
@@ -291,7 +293,7 @@ impl GtpInteractor for GtpClient {
         user_id: i64,
         text: String,
         image_url: String,
-    ) -> Result<Arc<String>> {
+    ) -> Result<AStr> {
         let value = self.get_image_value(text, image_url).await?;
         self.get_value_completion(user_id, value, ModelMode::Smart)
             .await
@@ -380,25 +382,25 @@ pub trait GtpInteractor {
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<Arc<String>>;
+    ) -> Result<AStr>;
     async fn get_smart_completion(
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<Arc<String>>;
+    ) -> Result<AStr>;
     async fn get_image_completion(
         &self,
         user_id: i64,
         text: String,
         image_url: String,
-    ) -> Result<Arc<String>>;
+    ) -> Result<AStr>;
 
     async fn get_image_smart_completion(
         &self,
         user_id: i64,
         text: String,
         image_url: String,
-    ) -> Result<Arc<String>>;
+    ) -> Result<AStr>;
 
     async fn get_image(&self, user_id: i64, prompt: &str) -> Result<Vec<u8>>;
 

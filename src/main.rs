@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use dotenvy::dotenv;
 use lambda_http::Body::Empty;
-use lambda_http::{http, run, service_fn, Body, Error, Request, Response};
+use lambda_http::{Body, Error, Request, Response, http, run, service_fn};
 use tracing::error;
 
 use crate::event_handler::EventHandler;
@@ -80,10 +80,16 @@ async fn main() -> Result<(), Error> {
     let gpt_model = context_env!("GPT_MODEL").leak();
     let gpt_smart_model = context_env!("GPT_SMART_MODEL").leak();
     let base_rules = context_env!("GPT_RULES");
+    let private_base_rules =
+        std::env::var("PRIVATE_GPT_RULES").unwrap_or_default();
+
     let gtp_preamble = context_env!("GPT_PREAMBLE");
+
     let heartbeat_interval_seconds =
         std::env::var("HEARTBEAT_INTERVAL_SECONDS");
+
     let voice = std::env::var("VOICE").unwrap_or("onyx".to_string()).leak();
+
     let mut tg_bot_allow_chats = Vec::new();
 
     for chat_id in context_env!("TG_ALLOW_CHATS").split(',') {
@@ -121,7 +127,7 @@ async fn main() -> Result<(), Error> {
         gpt_smart_model,
         voice,
         private_token,
-        String::default(),
+        private_base_rules,
     );
     let names_map = context_env!("NAMES_MAP");
     let names_map = serde_json::from_str(&names_map)?;
