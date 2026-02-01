@@ -1,0 +1,1 @@
+POST https://api.telegram.org/bot{{$dotenv TG_TOKEN}}/setWebhook?url={{$dotenv URL}}
