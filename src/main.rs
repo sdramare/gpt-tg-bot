@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use dotenvy::dotenv;
 use lambda_http::Body::Empty;
 use lambda_http::{Body, Error, Request, Response, http, run, service_fn};
-use tracing::error;
+use tracing::{error, info, warn};
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpClient;
@@ -51,6 +51,41 @@ macro_rules! context_env {
     };
 }
 
+fn parse_s3_uri(uri: &str) -> Result<(&str, &str)> {
+    let path = uri
+        .strip_prefix("s3://")
+        .context("S3 URI must start with s3://")?;
+    let (bucket, key) = path
+        .split_once('/')
+        .context("S3 URI must contain bucket and key")?;
+    if bucket.is_empty() || key.is_empty() {
+        anyhow::bail!("S3 URI bucket and key must not be empty");
+    }
+    Ok((bucket, key))
+}
+
+async fn fetch_rules_from_s3(uri: &str) -> Result<String> {
+    let (bucket, key) = parse_s3_uri(uri)?;
+    let config =
+        aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let client = aws_sdk_s3::Client::new(&config);
+    let resp = client
+        .get_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .context("Failed to get S3 object")?;
+    let bytes = resp
+        .body
+        .collect()
+        .await
+        .context("Failed to read S3 response body")?;
+    let text = String::from_utf8(bytes.into_bytes().to_vec())
+        .context("S3 object is not valid UTF-8")?;
+    Ok(text)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     if cfg!(debug_assertions) {
@@ -79,7 +114,27 @@ async fn main() -> Result<(), Error> {
     let gpt_token = context_env!("GPT_TOKEN").leak();
     let gpt_model = context_env!("GPT_MODEL").leak();
     let gpt_smart_model = context_env!("GPT_SMART_MODEL").leak();
-    let base_rules = context_env!("GPT_RULES");
+    let mut base_rules = context_env!("GPT_RULES");
+
+    if let Ok(s3_uri) = std::env::var("S3_RULES_URI")
+        && !s3_uri.is_empty()
+    {
+        match fetch_rules_from_s3(&s3_uri).await {
+            Ok(s3_rules) => {
+                info!("Loaded additional rules from S3: {s3_uri}");
+                base_rules.push('\n');
+                base_rules.push_str(&s3_rules);
+            }
+            Err(err) => {
+                warn!(
+                    error = format!("{err:#}"),
+                    "Failed to load rules from S3: {s3_uri}, \
+                     falling back to GPT_RULES env var only"
+                );
+            }
+        }
+    }
+
     let private_base_rules =
         std::env::var("PRIVATE_GPT_RULES").unwrap_or_default();
 
@@ -167,4 +222,48 @@ async fn main() -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_s3_uri_valid() {
+        let (bucket, key) =
+            parse_s3_uri("s3://my-bucket/path/to/rules.txt").unwrap();
+        assert_eq!(bucket, "my-bucket");
+        assert_eq!(key, "path/to/rules.txt");
+    }
+
+    #[test]
+    fn parse_s3_uri_single_key() {
+        let (bucket, key) = parse_s3_uri("s3://bucket/rules.txt").unwrap();
+        assert_eq!(bucket, "bucket");
+        assert_eq!(key, "rules.txt");
+    }
+
+    #[test]
+    fn parse_s3_uri_missing_prefix() {
+        let result = parse_s3_uri("https://bucket/key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_s3_uri_no_key() {
+        let result = parse_s3_uri("s3://bucket");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_s3_uri_empty_key() {
+        let result = parse_s3_uri("s3://bucket/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_s3_uri_empty_bucket() {
+        let result = parse_s3_uri("s3:///key");
+        assert!(result.is_err());
+    }
 }

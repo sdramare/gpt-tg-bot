@@ -1,6 +1,7 @@
 # GPT Telegram Bot - Development Guidelines
 
 ## Build & Test Commands
+
 - `cargo build` - Build the project
 - `cargo run` - Run locally with debug features
 - `cargo test` - Run all tests
@@ -10,6 +11,7 @@
 - `cargo fmt` - Format code
 
 ## Code Style Guidelines
+
 - **Formatting**: 80-column max line width (defined in rustfmt.toml)
 - **Error Handling**: Use `anyhow` for general errors, `thiserror` for library errors
 - **Logging**: Use `tracing` macros (`error!`, `info!`, etc.) for structured logging
@@ -22,7 +24,9 @@
 - **Documentation**: Document public interfaces with appropriate comments
 
 ## Environment Setup
+
 Required environment variables are loaded from `.env` file in debug mode:
+
 - `TG_TOKEN` - Telegram Bot API token
 - `GPT_TOKEN` - OpenAI API token
 - `GPT_MODEL` - Default GPT model to use
@@ -32,3 +36,4 @@ Required environment variables are loaded from `.env` file in debug mode:
 - `GPT_RULES` - Base rules for GPT interactions
 - `GPT_PREAMBLE` - Preamble for GPT requests
 - `DUMMY_ANSWERS` - Comma-separated list of dummy answers
+- `S3_RULES_URI` - (Optional) S3 URI (`s3://bucket/key`) to load additional model base rules, appended to `GPT_RULES`. Falls back to `GPT_RULES` only on failure.
