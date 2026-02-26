@@ -43,11 +43,6 @@ enum Content {
     ImageUrl { image_url: Url },
 }
 
-#[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
-struct Image {
-    url: String,
-}
-
 #[derive(Debug, Serialize, Clone)]
 #[serde(untagged)]
 enum Value {
@@ -107,9 +102,6 @@ struct ImageGenerationRequest<'a> {
     quality: &'static str,
     moderation: &'static str,
 }
-
-#[derive(Debug, Deserialize, Constructor)]
-struct DalleResponse {}
 
 #[derive(Debug, Deserialize, Constructor)]
 struct GptImageResponse {
