@@ -12,12 +12,12 @@ use rand::seq::SliceRandom;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
-use tracing::{Instrument, error, info, span, warn};
+use tracing::{Instrument, error, info, instrument, warn};
 
 use crate::event_handler::EventHandler;
 use crate::gpt_client::GtpInteractor;
 use crate::tg_client::{
-    Chat, Message, PRIVATE_CHAT, TelegramInteractor, Update,
+    Chat, Message, PRIVATE_CHAT, PhotoSize, TelegramInteractor, Update,
 };
 
 const DRAW_COMMAND: &str = "нарисуй";
@@ -129,71 +129,88 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         }
 
         if let Some(text) = message.text {
-            if text.contains("https://") {
-                self.dummy_reaction(message.chat.id).await?;
-
-                return Ok(());
-            }
-
-            let used_name = self
-                .config
-                .tg_bot_names
-                .iter()
-                .copied()
-                .find(|&name| text.starts_with(name));
-
-            if should_answer(
-                message.reply_to_message.as_deref(),
-                &message.chat,
-                used_name,
-                &self.config.tg_bot_allow_chats,
-            ) {
-                let text = used_name
-                    .map(|name| text.replace(name, ""))
-                    .unwrap_or(text);
-
-                let mut first_name = message.from.first_name;
-
-                for (name, replacement) in &self.config.name_map {
-                    first_name = first_name.replace(name, replacement);
-                }
-
-                let span = span!(
-                    tracing::Level::INFO,
-                    "response",
-                    user_name = first_name
-                );
-
-                async move {
-                    let result = self
-                        .process_and_answer(&message.chat, &text, &first_name)
-                        .in_current_span()
-                        .await
-                        .with_context(|| format!("process message: {text}"));
-
-                    if let Err(error) = result
-                        && message.chat.is_private()
-                    {
-                        let error_message = format!("```\n{:?}\n```", &error);
-                        self.tg_client
-                            .send_message(
-                                message.chat.id,
-                                &error_message,
-                                "MarkdownV2".into(),
-                            )
-                            .in_current_span()
-                            .await?;
-                        return Err(error);
-                    }
-
-                    info!("Complete");
-                    Ok(())
-                }
-                .instrument(span)
-                .await?
-            }
+            self.process_text_update(
+                message.chat,
+                message.from.first_name,
+                message.reply_to_message,
+                text,
+            )
+            .await?;
         }
 
+        Ok(())
+    }
+
+    async fn process_text_update(
+        &self,
+        chat: Chat,
+        from_first_name: String,
+        reply_to_message: Option<Box<Message>>,
+        text: String,
+    ) -> anyhow::Result<()> {
+        if text.contains("https://") {
+            self.dummy_reaction(chat.id).await?;
+            return Ok(());
+        }
+
+        let used_name = self.find_bot_name(&text);
+
+        if !should_answer(
+            reply_to_message.as_deref(),
+            &chat,
+            used_name,
+            &self.config.tg_bot_allow_chats,
+        ) {
+            return Ok(());
+        }
+
+        let text = used_name.map(|name| text.replace(name, "")).unwrap_or(text);
+
+        let first_name = self.resolve_first_name(from_first_name);
+
+        self.respond(chat, text, first_name).await
+    }
+
+    fn find_bot_name<'a>(&'a self, text: &str) -> Option<&'a str> {
+        self.config
+            .tg_bot_names
+            .iter()
+            .copied()
+            .find(|&name| text.starts_with(name))
+    }
+
+    fn resolve_first_name(&self, mut first_name: String) -> String {
+        for (name, replacement) in &self.config.name_map {
+            first_name = first_name.replace(name, replacement);
+        }
+        first_name
+    }
+
+    #[instrument(skip(self, chat, text), fields(chat_id = %chat.id))]
+    async fn respond(
+        &self,
+        chat: Chat,
+        text: String,
+        user_name: String,
+    ) -> anyhow::Result<()> {
+        let result = self
+            .process_and_answer(&chat, &text, &user_name)
+            .in_current_span()
+            .await
+            .with_context(|| format!("process message: {text}"));
+
+        if let Err(error) = result
+            && chat.is_private()
+        {
+            let error_message = format!("```\n{:?}\n```", &error);
+            self.tg_client
+                .send_message(chat.id, &error_message, "MarkdownV2".into())
+                .in_current_span()
+                .await?;
+            return Err(error);
+        }
+
+        info!("Complete");
         Ok(())
     }
 
@@ -224,6 +241,22 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         first_name: &str,
         chat: &Chat,
     ) -> anyhow::Result<()> {
+        let result = self
+            .get_gpt_text_completion(text, first_name, chat)
+            .in_current_span()
+            .await?;
+
+        self.send_text_response(chat, &result)
+            .in_current_span()
+            .await
+    }
+
+    async fn get_gpt_text_completion(
+        &self,
+        text: &str,
+        first_name: &str,
+        chat: &Chat,
+    ) -> anyhow::Result<std::sync::Arc<str>> {
         let text = if chat.is_private() {
             text.to_owned()
         } else {
@@ -234,21 +267,26 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
         info!("Ask GPT");
 
-        let result = if chat.is_private()
-            && contains_case_insensitive(&text, "подумай")
+        if chat.is_private() && contains_case_insensitive(&text, "подумай")
         {
             info!("Smart completion");
             self.gtp_client(chat)
                 .get_smart_completion(chat.id, text)
                 .in_current_span()
-                .await?
+                .await
         } else {
             self.gtp_client(chat)
                 .get_completion(chat.id, text)
                 .in_current_span()
-                .await?
-        };
+                .await
+        }
+    }
 
+    async fn send_text_response(
+        &self,
+        chat: &Chat,
+        result: &str,
+    ) -> anyhow::Result<()> {
         info!("Sending answer to TG");
 
         if !chat.is_private() {
@@ -271,7 +309,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             if num > 100 {
                 let audio = self
                     .gtp_client(chat)
-                    .get_audio(&result)
+                    .get_audio(result)
                     .in_current_span()
                     .await?;
 
@@ -290,7 +328,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         }
 
         self.tg_client
-            .send_message(chat.id, &result, "MarkdownV2".into())
+            .send_message(chat.id, result, "MarkdownV2".into())
             .in_current_span()
             .await?;
 
@@ -336,21 +374,9 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     }
 
     async fn process_photo(&self, message: Message) -> anyhow::Result<()> {
-        let text = message.caption.unwrap_or("Что на картинке?".to_string());
+        let (text, used_name) = self.extract_caption_and_used_name(&message);
 
-        let used_name = self
-            .config
-            .tg_bot_names
-            .iter()
-            .copied()
-            .find(|&name| text.starts_with(name));
-
-        if should_answer(
-            message.reply_to_message.as_deref(),
-            &message.chat,
-            used_name,
-            &self.config.tg_bot_allow_chats,
-        ) {
+        if self.should_process_photo(&message, used_name) {
             let Some(photo) = message.photo.and_then(|photos| {
                 photos.into_iter().max_by_key(|x| x.file_size)
             }) else {
@@ -359,64 +385,109 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
             let file_id = &photo.file_id;
             info!(?file_id, "photo request");
-            let photo_url = self.tg_client.get_file_url(&photo.file_id).await?;
+            let photo_url = self.get_photo_url(&photo).await?;
 
-            let result = if message.chat.is_private()
-                && contains_case_insensitive(&text, "подумай")
-            {
-                info!("Smart completion");
-                self.gtp_client(&message.chat)
-                    .get_image_smart_completion(
-                        message.chat.id,
-                        text,
-                        photo_url,
-                    )
-                    .await
-            } else {
-                self.gtp_client(&message.chat)
-                    .get_image_completion(message.chat.id, text, photo_url)
-                    .await
-            };
+            let result = self
+                .get_image_completion_result(&message.chat, text, photo_url)
+                .await;
 
-            info!("Sending answer to TG");
+            self.send_image_response(&message.chat, result).await?;
+        }
 
-            match result {
-                Ok(result) => {
+        Ok(())
+    }
+
+    fn extract_caption_and_used_name(
+        &self,
+        message: &Message,
+    ) -> (String, Option<&str>) {
+        let text = message
+            .caption
+            .clone()
+            .unwrap_or("Что на картинке?".to_string());
+        let used_name = self
+            .config
+            .tg_bot_names
+            .iter()
+            .copied()
+            .find(|&name| text.starts_with(name));
+        (text, used_name)
+    }
+
+    fn should_process_photo(
+        &self,
+        message: &Message,
+        used_name: Option<&str>,
+    ) -> bool {
+        should_answer(
+            message.reply_to_message.as_deref(),
+            &message.chat,
+            used_name,
+            &self.config.tg_bot_allow_chats,
+        )
+    }
+
+    async fn get_photo_url(&self, photo: &PhotoSize) -> anyhow::Result<String> {
+        self.tg_client.get_file_url(&photo.file_id).await
+    }
+
+    async fn get_image_completion_result(
+        &self,
+        chat: &Chat,
+        text: String,
+        photo_url: String,
+    ) -> anyhow::Result<std::sync::Arc<str>> {
+        if chat.is_private() && contains_case_insensitive(&text, "подумай")
+        {
+            info!("Smart completion");
+            self.gtp_client(chat)
+                .get_image_smart_completion(chat.id, text, photo_url)
+                .await
+        } else {
+            self.gtp_client(chat)
+                .get_image_completion(chat.id, text, photo_url)
+                .await
+        }
+    }
+
+    async fn send_image_response(
+        &self,
+        chat: &Chat,
+        result: Result<std::sync::Arc<str>, anyhow::Error>,
+    ) -> anyhow::Result<()> {
+        info!("Sending answer to TG");
+
+        match result {
+            Ok(result) => {
+                self.tg_client
+                    .send_message(chat.id, &result, "MarkdownV2".into())
+                    .await?;
+            }
+            Err(error) => {
+                if chat.is_private() {
+                    let error_message = format!("```\n{}\n```", &error);
                     self.tg_client
                         .send_message(
-                            message.chat.id,
-                            &result,
+                            chat.id,
+                            &error_message,
+                            "MarkdownV2".into(),
+                        )
+                        .await?;
+                } else {
+                    self.tg_client
+                        .send_message(
+                            chat.id,
+                            "Прости, я задумался. Можешь повторить?",
                             "MarkdownV2".into(),
                         )
                         .await?;
                 }
-                Err(error) => {
-                    if message.chat.is_private() {
-                        let error_message = format!("```\n{}\n```", &error);
-                        self.tg_client
-                            .send_message(
-                                message.chat.id,
-                                &error_message,
-                                "MarkdownV2".into(),
-                            )
-                            .await?;
-                    } else {
-                        self.tg_client
-                            .send_message(
-                                message.chat.id,
-                                "Прости, я задумался. Можешь повторить?",
-                                "MarkdownV2".into(),
-                            )
-                            .await?;
-                    }
 
-                    bail!(error)
-                }
-            };
+                bail!(error)
+            }
+        };
 
-            info!("Complete");
-        }
-
+        info!("Complete");
         Ok(())
     }
 
