@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use base64::{Engine as _, engine::general_purpose};
 use chrono::NaiveDateTime;
 use chrono::naive::serde::ts_seconds::deserialize as from_ts;
 use derive_more::Constructor;
@@ -91,6 +92,9 @@ pub struct TgClient {
     get_file_url: String,
     download_file_url: String,
 }
+
+#[derive(Debug, Default)]
+pub struct ConsoleClient;
 
 #[derive(Debug, Default, Constructor, Serialize)]
 struct TgMessageRequest<'a> {
@@ -221,6 +225,13 @@ impl TgClient {
     }
 }
 
+impl ConsoleClient {
+    fn image_to_data_url(image: &[u8]) -> String {
+        let b64 = general_purpose::STANDARD.encode(image);
+        format!("data:image/png;base64,{b64}")
+    }
+}
+
 impl TelegramInteractor for TgClient {
     async fn get_file_url(&self, file_id: &str) -> Result<String> {
         let file_path = self.get_file_path(file_id).await?;
@@ -324,6 +335,38 @@ impl TelegramInteractor for TgClient {
     }
 }
 
+impl TelegramInteractor for ConsoleClient {
+    async fn get_file_url(&self, file_id: &str) -> Result<String> {
+        bail!("Console mode does not support file_id: {file_id}")
+    }
+
+    async fn send_message(
+        &self,
+        chat_id: i64,
+        text: &str,
+        _parse_mode: Option<&'static str>,
+    ) -> Result<()> {
+        println!("[chat:{chat_id}] {text}");
+        Ok(())
+    }
+
+    async fn send_image(&self, chat_id: i64, image: Vec<u8>) -> Result<()> {
+        let data_url = Self::image_to_data_url(&image);
+        println!("[chat:{chat_id}] {data_url}");
+        Ok(())
+    }
+
+    async fn send_voice(&self, chat_id: i64, audio: Vec<u8>) -> Result<()> {
+        println!("[chat:{chat_id}] [voice-bytes:{}]", audio.len());
+        Ok(())
+    }
+
+    async fn leave_chat(&self, chat_id: i64) -> Result<()> {
+        println!("[chat:{chat_id}] [leave-chat]");
+        Ok(())
+    }
+}
+
 fn escape_text(text: &str) -> String {
     let mut result_text = String::with_capacity(text.len());
 
@@ -361,7 +404,7 @@ pub trait TelegramInteractor: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use crate::tg_client::escape_text;
+    use crate::tg_client::{ConsoleClient, escape_text};
 
     #[tokio::test]
     async fn test_escape_text() {
@@ -382,5 +425,11 @@ mod tests {
         let text = "Hello **world**!";
         let escaped_text = escape_text(text);
         assert_eq!(escaped_text, "Hello **world**\\!");
+    }
+
+    #[test]
+    fn test_console_client_data_url_prefix() {
+        let data_url = ConsoleClient::image_to_data_url(b"PNG");
+        assert!(data_url.starts_with("data:image/png;base64,"));
     }
 }

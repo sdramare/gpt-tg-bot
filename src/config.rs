@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use crate::gpt_client::GtpClient;
 use crate::message_processor::{Config, TgBot};
 use crate::s3_client::fetch_rules_from_s3;
-use crate::tg_client::TgClient;
+use crate::tg_client::{ConsoleClient, TgClient};
 
 macro_rules! context_env {
     ($name: literal) => {
@@ -173,6 +173,55 @@ impl AppConfig {
             gtp_client,
             private_gtp_client,
             tg_client,
+            config,
+            rand::thread_rng,
+        )
+    }
+
+    pub fn first_allowed_chat_id(&self) -> Result<i64> {
+        self.tg_bot_allow_chats
+            .first()
+            .copied()
+            .context("TG_ALLOW_CHATS must contain at least one chat id")
+    }
+
+    pub fn build_console_tg_bot(
+        self,
+    ) -> TgBot<ConsoleClient, GtpClient, ThreadRng> {
+        let gtp_client = GtpClient::new(
+            self.api_url,
+            self.gpt_model,
+            self.gpt_smart_model,
+            self.voice,
+            self.gpt_token,
+            self.base_rules,
+        );
+
+        let private_gtp_client = GtpClient::new(
+            self.private_api_url,
+            self.private_model,
+            self.gpt_smart_model,
+            self.voice,
+            self.private_token,
+            self.private_base_rules,
+        );
+
+        let mut config = Config::new(
+            self.names_map,
+            self.gtp_preamble,
+            self.dummy_answers,
+            self.tg_bot_allow_chats,
+            self.tg_bot_names,
+        );
+
+        if let Some(heartbeat_interval) = self.heartbeat_interval {
+            config.message_delay = heartbeat_interval;
+        }
+
+        TgBot::new(
+            gtp_client,
+            private_gtp_client,
+            ConsoleClient,
             config,
             rand::thread_rng,
         )

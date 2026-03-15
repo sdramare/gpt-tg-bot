@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 
 use std::backtrace::Backtrace;
+use std::io::{self, BufRead};
 use std::path::Path;
 
 use dotenvy::dotenv;
@@ -10,7 +11,9 @@ use tracing::error;
 
 use crate::config::AppConfig;
 use crate::event_handler::EventHandler;
-use crate::tg_client::Message;
+use crate::gpt_client::GtpClient;
+use crate::message_processor::TgBot;
+use crate::tg_client::{Chat, ConsoleClient, Message, User};
 
 mod config;
 mod event_handler;
@@ -62,6 +65,95 @@ fn init_tracing() {
     }
 }
 
+fn has_console_flag() -> bool {
+    std::env::args().any(|arg| arg == "--console")
+}
+
+async fn run_console_mode(
+    tg_bot: &TgBot<ConsoleClient, GtpClient, rand::rngs::ThreadRng>,
+    chat_id: i64,
+) -> Result<(), Error> {
+    println!("Console debug mode is enabled.");
+    println!(
+        "Using group-chat simulation to apply preamble and regular \
+         message-routing logic."
+    );
+    println!("Type a prompt and press Enter. Type 'quit' or 'exit' to stop.");
+
+    let stdin = io::stdin();
+    let mut message_id = 1_i32;
+
+    for line in stdin.lock().lines() {
+        let input = line?;
+        let prompt = input.trim();
+
+        if prompt.is_empty() {
+            continue;
+        }
+
+        if prompt.eq_ignore_ascii_case("quit")
+            || prompt.eq_ignore_ascii_case("exit")
+        {
+            println!("Stopping console debug mode.");
+            break;
+        }
+
+        let message = Message {
+            message_id,
+            from: User {
+                id: chat_id,
+                is_bot: false,
+                first_name: "Console".to_string(),
+                last_name: None,
+                username: Some("console_user".to_string()),
+                language_code: Some("en".to_string()),
+            },
+            chat: Chat {
+                id: chat_id,
+                first_name: Some("Console".to_string()),
+                last_name: None,
+                username: Some("console_user".to_string()),
+                chat_type: "group".to_string(),
+            },
+            date: chrono::Utc::now().naive_utc(),
+            text: Some(prompt.to_string()),
+            caption: None,
+            photo: None,
+            reply_to_message: Some(Box::new(Message {
+                message_id: 0,
+                from: User {
+                    id: -1,
+                    is_bot: true,
+                    first_name: "Bot".to_string(),
+                    last_name: None,
+                    username: Some("console_bot".to_string()),
+                    language_code: None,
+                },
+                chat: Chat {
+                    id: chat_id,
+                    first_name: Some("Console".to_string()),
+                    last_name: None,
+                    username: Some("console_user".to_string()),
+                    chat_type: "group".to_string(),
+                },
+                date: chrono::Utc::now().naive_utc(),
+                text: Some("console".to_string()),
+                caption: None,
+                photo: None,
+                reply_to_message: None,
+            })),
+        };
+
+        if let Err(err) = tg_bot.process_message(message).await {
+            eprintln!("[console-error] {err:#}");
+        }
+
+        message_id = message_id.saturating_add(1);
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     if cfg!(debug_assertions) {
@@ -70,7 +162,16 @@ async fn main() -> Result<(), Error> {
 
     init_tracing();
 
+    let console_mode = cfg!(debug_assertions) && has_console_flag();
     let app_config = AppConfig::from_env().await?;
+
+    if console_mode {
+        let chat_id = app_config.first_allowed_chat_id()?;
+        let tg_bot = app_config.build_console_tg_bot();
+        run_console_mode(&tg_bot, chat_id).await?;
+        return Ok(());
+    }
+
     let tg_bot = app_config.build_tg_bot();
 
     if cfg!(debug_assertions) {
