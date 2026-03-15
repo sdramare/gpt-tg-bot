@@ -15,12 +15,10 @@ use tokio::time::Instant;
 use tracing::{Instrument, error, info, instrument, warn};
 
 use crate::event_handler::EventHandler;
-use crate::gpt_client::GtpInteractor;
+use crate::gpt_client::{CompletionResult, GtpInteractor};
 use crate::tg_client::{
     Chat, Message, PRIVATE_CHAT, PhotoSize, TelegramInteractor, Update,
 };
-
-const DRAW_COMMAND: &str = "нарисуй";
 
 #[derive(new)]
 pub struct Config {
@@ -220,19 +218,9 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         text: &str,
         first_name: &str,
     ) -> anyhow::Result<()> {
-        if let Some(index) = text.to_lowercase().find(DRAW_COMMAND) {
-            self.process_image_request(text, &index, chat)
-                .in_current_span()
-                .await?;
-
-            return Ok(());
-        }
-
         self.process_text_message(text, first_name, chat)
             .in_current_span()
-            .await?;
-
-        Ok(())
+            .await
     }
 
     async fn process_text_message(
@@ -246,9 +234,15 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             .in_current_span()
             .await?;
 
-        self.send_text_response(chat, &result)
-            .in_current_span()
-            .await
+        match result {
+            CompletionResult::Text(ref text) => {
+                self.send_text_response(chat, text).in_current_span().await
+            }
+            CompletionResult::Image(bytes) => {
+                info!("Sending generated image to TG");
+                self.tg_client.send_image(chat.id, bytes).await
+            }
+        }
     }
 
     async fn get_gpt_text_completion(
@@ -256,7 +250,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         text: &str,
         first_name: &str,
         chat: &Chat,
-    ) -> anyhow::Result<std::sync::Arc<str>> {
+    ) -> anyhow::Result<CompletionResult> {
         let text = if chat.is_private() {
             text.to_owned()
         } else {
@@ -332,36 +326,6 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             .in_current_span()
             .await?;
 
-        Ok(())
-    }
-
-    async fn process_image_request(
-        &self,
-        text: &str,
-        index: &usize,
-        chat: &Chat,
-    ) -> anyhow::Result<()> {
-        let text = &text[index + DRAW_COMMAND.len()..];
-
-        info!("Image request");
-
-        let image_data = self.gtp_client(chat).get_image(chat.id, text).await;
-
-        match image_data {
-            Ok(image_data) => {
-                self.tg_client.send_image(chat.id, image_data).await?;
-            }
-            Err(error) => {
-                self.tg_client
-                    .send_message(
-                        chat.id,
-                        "Сейчас я такое не могу нарисовать",
-                        None,
-                    )
-                    .await?;
-                return Err(error);
-            }
-        }
         Ok(())
     }
 
@@ -619,7 +583,7 @@ mod tests {
     use mockall::predicate::{always, eq};
     use rand::rngs::mock::StepRng;
 
-    use crate::gpt_client::MockGtpInteractor;
+    use crate::gpt_client::{CompletionResult, MockGtpInteractor};
     use crate::message_processor::contains_case_insensitive;
     use crate::tg_client::{
         Chat, Message, MockTelegramInteractor, PRIVATE_CHAT, PhotoSize, User,
@@ -687,7 +651,9 @@ mod tests {
             .expect_get_completion()
             .times(1)
             .with(eq(0), eq("Call me Bob.  Hello".to_string()))
-            .returning(|_, _| Ok("How are you?".to_string().into()));
+            .returning(|_, _| {
+                Ok(CompletionResult::Text("How are you?".into()))
+            });
 
         tg_client
             .expect_send_message()
@@ -794,7 +760,7 @@ mod tests {
             .expect_get_completion()
             .with(eq(123), eq("preamble Hello".to_string()))
             .times(1)
-            .returning(|_, _| Ok("Hello Sir".to_string().into()));
+            .returning(|_, _| Ok(CompletionResult::Text("Hello Sir".into())));
 
         tg_client
             .expect_send_message()
@@ -809,7 +775,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // Test when the message contains a text with a draw command
+    // Test when the model decides to generate an image via tool calling
     #[tokio::test]
     async fn test_process_message_with_draw_command() {
         let mut tg_client = MockTelegramInteractor::new();
@@ -817,20 +783,20 @@ mod tests {
         let public_gtp_client = MockGtpInteractor::new();
 
         gtp_client
-            .expect_get_image()
-            .with(eq(123), eq(" cat"))
+            .expect_get_completion()
+            .with(eq(123), always())
             .times(1)
-            .returning(|_, _| Ok("url".to_string().into()));
+            .returning(|_, _| Ok(CompletionResult::Image(b"PNG".to_vec())));
 
         tg_client
             .expect_send_image()
-            .with(eq(123), always())
+            .with(eq(123), eq(b"PNG".to_vec()))
             .times(1)
             .returning(|_, _| Ok(()));
 
         let bot = create_bot(tg_client, gtp_client, public_gtp_client);
         let message =
-            create_private_message(Some("нарисуй cat".to_string()), None);
+            create_private_message(Some("нарисуй кота".to_string()), None);
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }
@@ -846,7 +812,7 @@ mod tests {
             .expect_get_completion()
             .with(eq(123), eq("preamble Hello".to_string()))
             .times(1)
-            .returning(|_, _| Ok("Hello Sir".to_string().into()));
+            .returning(|_, _| Ok(CompletionResult::Text("Hello Sir".into())));
 
         tg_client
             .expect_send_message()

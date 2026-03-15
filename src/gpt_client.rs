@@ -7,22 +7,83 @@ use derive_more::{Constructor, From};
 #[cfg(test)]
 use mockall::automock;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 type AStr = Arc<str>;
+
+#[derive(Debug, Serialize, Clone)]
+struct FunctionDef {
+    name: &'static str,
+    description: &'static str,
+    parameters: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct Tool {
+    #[serde(rename = "type")]
+    tool_type: &'static str,
+    function: FunctionDef,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallFunction {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCall {
+    id: String,
+    function: ToolCallFunction,
+}
 
 #[derive(Debug, Serialize, Constructor)]
 struct Request<'a> {
     model: &'a str,
     messages: &'a Vec<Message>,
     temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<&'a Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize, Clone)]
-#[serde(tag = "role", content = "content", rename_all = "snake_case")]
+#[serde(tag = "role", rename_all = "snake_case")]
 enum Message {
-    User(Value),
-    System(Value),
-    Assistant(Value),
+    User {
+        content: Value,
+    },
+    System {
+        content: Value,
+    },
+    #[serde(rename = "assistant")]
+    AssistantText {
+        content: Value,
+    },
+    #[serde(rename = "assistant")]
+    AssistantToolCall {
+        content: Option<Value>,
+        tool_calls: Vec<SerializedToolCall>,
+    },
+    Tool {
+        tool_call_id: String,
+        content: Value,
+    },
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct SerializedToolCallFunction {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct SerializedToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    tool_type: &'static str,
+    function: SerializedToolCallFunction,
 }
 
 #[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
@@ -50,34 +111,27 @@ enum Value {
     Complex(Vec<Content>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct Response {
-    id: String,
-    object: String,
-    created: i64,
-    model: String,
     choices: Vec<Choice>,
-    usage: Usage,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct Choice {
-    index: i32,
     message: ResponseMessage,
     finish_reason: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct ResponseMessage {
-    role: String,
-    content: String,
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCall>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Usage {
-    prompt_tokens: i32,
-    completion_tokens: i32,
-    total_tokens: i32,
+pub enum CompletionResult {
+    Text(AStr),
+    Image(Vec<u8>),
 }
 
 #[derive(Debug)]
@@ -115,9 +169,32 @@ struct AudioSpeechRequest<'a> {
     voice: &'a str,
 }
 
+#[derive(Clone, Copy)]
 enum ModelMode {
     Fast,
     Smart,
+}
+
+fn make_generate_image_tool() -> Tool {
+    Tool {
+        tool_type: "function",
+        function: FunctionDef {
+            name: "generate_image",
+            description: "Generate an image based on a text prompt. \
+                Use this when the user asks to draw, create, or generate \
+                an image.",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The image generation prompt"
+                    }
+                },
+                "required": ["prompt"]
+            }),
+        },
+    }
 }
 
 impl GtpClient {
@@ -129,13 +206,14 @@ impl GtpClient {
         token: &'static str,
         base_rules: String,
     ) -> Self {
-        //let api_url = "https://api.openai.com/v1/chat/completions";
         let http_client = reqwest::Client::new();
 
         let base_rules = if base_rules.is_empty() {
             Vec::new()
         } else {
-            vec![Message::System(Value::Plain(base_rules.into()))]
+            vec![Message::System {
+                content: Value::Plain(base_rules.into()),
+            }]
         };
 
         GtpClient {
@@ -156,24 +234,57 @@ impl GtpClient {
         user_id: i64,
         value: Value,
         mode: ModelMode,
-    ) -> Result<AStr> {
-        let user_message = Message::User(value);
-        let mut messages = {
-            let user_chat = self.messages.get(&user_id);
+    ) -> Result<CompletionResult> {
+        let tools = vec![make_generate_image_tool()];
+        let mut messages = self.user_messages(user_id);
+        messages.push(Message::User { content: value });
 
-            match user_chat {
-                Some(chat) => chat.clone(),
-                None => self.base_rules.clone(),
+        let model = self.model_for(mode);
+
+        loop {
+            let choice = self
+                .request_chat_completion(model, &messages, &tools)
+                .await?;
+
+            if choice.finish_reason == "tool_calls" {
+                if let Some(result) = self
+                    .handle_tool_calls(user_id, &mut messages, choice)
+                    .await?
+                {
+                    return Ok(result);
+                }
+                continue;
             }
-        };
 
-        messages.push(user_message.clone());
+            return Ok(self.finalize_text_response(
+                user_id,
+                &mut messages,
+                choice,
+            ));
+        }
+    }
 
-        let model = match mode {
+    fn user_messages(&self, user_id: i64) -> Vec<Message> {
+        self.messages
+            .get(&user_id)
+            .map_or_else(|| self.base_rules.clone(), |chat| chat.clone())
+    }
+
+    fn model_for(&self, mode: ModelMode) -> &'static str {
+        match mode {
             ModelMode::Fast => self.model,
             ModelMode::Smart => self.smart_model,
-        };
-        let request_data = Request::new(model, &messages, 1.0);
+        }
+    }
+
+    async fn request_chat_completion(
+        &self,
+        model: &'static str,
+        messages: &Vec<Message>,
+        tools: &Vec<Tool>,
+    ) -> Result<Choice> {
+        let request_data =
+            Request::new(model, messages, 1.0, Some(tools), Some("auto"));
         let response = self
             .http_client
             .post(&self.chat_url)
@@ -182,26 +293,103 @@ impl GtpClient {
             .send()
             .await?;
 
-        if response.status().is_success() {
-            let mut completion = response.json::<Response>().await?;
-            let choice = completion.choices.swap_remove(0);
-            let result: AStr = choice.message.content.into();
-            let assist_message =
-                Message::Assistant(Value::Plain(result.clone()));
-
-            {
-                let mut messages = self
-                    .messages
-                    .entry(user_id)
-                    .or_insert_with(|| self.base_rules.clone());
-                messages.push(user_message);
-                messages.push(assist_message);
-            }
-
-            Ok(result)
-        } else {
+        if !response.status().is_success() {
             bail!(response.text().await?)
         }
+
+        let mut completion = response.json::<Response>().await?;
+        Ok(completion.choices.swap_remove(0))
+    }
+
+    async fn handle_tool_calls(
+        &self,
+        user_id: i64,
+        messages: &mut Vec<Message>,
+        choice: Choice,
+    ) -> Result<Option<CompletionResult>> {
+        let tool_calls = choice.message.tool_calls;
+        let serialized = Self::serialize_tool_calls(&tool_calls);
+        messages.push(Message::AssistantToolCall {
+            content: None,
+            tool_calls: serialized,
+        });
+
+        for tool_call in tool_calls {
+            if tool_call.function.name != "generate_image" {
+                continue;
+            }
+
+            let image_bytes = self
+                .execute_generate_image_call(messages, &tool_call)
+                .await?;
+            self.messages.insert(user_id, messages.clone());
+            return Ok(Some(CompletionResult::Image(image_bytes)));
+        }
+
+        Ok(None)
+    }
+
+    fn serialize_tool_calls(
+        tool_calls: &[ToolCall],
+    ) -> Vec<SerializedToolCall> {
+        tool_calls
+            .iter()
+            .map(|tc| SerializedToolCall {
+                id: tc.id.clone(),
+                tool_type: "function",
+                function: SerializedToolCallFunction {
+                    name: tc.function.name.clone(),
+                    arguments: tc.function.arguments.clone(),
+                },
+            })
+            .collect()
+    }
+
+    async fn execute_generate_image_call(
+        &self,
+        messages: &mut Vec<Message>,
+        tool_call: &ToolCall,
+    ) -> Result<Vec<u8>> {
+        let args: serde_json::Value =
+            serde_json::from_str(&tool_call.function.arguments)
+                .context("parse generate_image arguments")?;
+        let prompt = args["prompt"]
+            .as_str()
+            .context("missing prompt in generate_image args")?;
+
+        let image_bytes = self.get_image_internal(prompt).await?;
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            general_purpose::STANDARD.encode(&image_bytes)
+        );
+
+        messages.push(Message::Tool {
+            tool_call_id: tool_call.id.clone(),
+            content: Value::Plain(
+                format!("Image generated for prompt: '{prompt}'").into(),
+            ),
+        });
+        messages.push(Message::AssistantText {
+            content: Value::Complex(vec![Content::ImageUrl {
+                image_url: Url::new(data_url.into()),
+            }]),
+        });
+
+        Ok(image_bytes)
+    }
+
+    fn finalize_text_response(
+        &self,
+        user_id: i64,
+        messages: &mut Vec<Message>,
+        choice: Choice,
+    ) -> CompletionResult {
+        let result: AStr = choice.message.content.unwrap_or_default().into();
+        messages.push(Message::AssistantText {
+            content: Value::Plain(result.clone()),
+        });
+        self.messages.insert(user_id, messages.clone());
+        CompletionResult::Text(result)
     }
 
     async fn get_image_value(
@@ -209,7 +397,6 @@ impl GtpClient {
         text: String,
         image_url: String,
     ) -> Result<Value> {
-        // Download the image from URL
         let image_bytes = self
             .http_client
             .get(&image_url)
@@ -220,25 +407,58 @@ impl GtpClient {
             .await
             .with_context(|| format!("get image bytes {image_url}"))?;
 
-        // Convert to base64
         let base64_image = general_purpose::STANDARD.encode(&image_bytes);
 
-        // Determine image format from URL or content
         let format = if image_url.ends_with(".png") {
             "png"
         } else {
-            "jpeg" // Default to jpeg
+            "jpeg"
         };
 
         let data_url = format!("data:image/{format};base64,{base64_image}");
 
-        let value = Value::Complex(vec![
+        Ok(Value::Complex(vec![
             Content::Text { text: text.into() },
             Content::ImageUrl {
                 image_url: Url::new(data_url.into()),
             },
-        ]);
-        Ok(value)
+        ]))
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn get_image_internal(&self, prompt: &str) -> Result<Vec<u8>> {
+        let dalle_request = ImageGenerationRequest::new(
+            "gpt-image-1",
+            prompt,
+            1,
+            "1024x1024",
+            "high",
+            "low",
+        );
+
+        info!("requesting image generation with model gpt-image-1");
+
+        let response = self
+            .http_client
+            .post(&self.dalle_url)
+            .bearer_auth(self.token)
+            .json(&dalle_request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            bail!(response.text().await?)
+        }
+
+        let mut completion = response.json::<GptImageResponse>().await?;
+        let img_resp = completion
+            .data
+            .pop()
+            .ok_or_else(|| anyhow!("no image data found in response"))?;
+
+        general_purpose::STANDARD
+            .decode(img_resp.b64_json.as_bytes())
+            .with_context(|| format!("decode image {}", img_resp.b64_json))
     }
 }
 
@@ -247,7 +467,7 @@ impl GtpInteractor for GtpClient {
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<AStr> {
+    ) -> Result<CompletionResult> {
         self.get_value_completion(
             user_id,
             Value::Plain(prompt.into()),
@@ -260,7 +480,7 @@ impl GtpInteractor for GtpClient {
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<AStr> {
+    ) -> Result<CompletionResult> {
         self.get_value_completion(
             user_id,
             Value::Plain(prompt.into()),
@@ -276,8 +496,15 @@ impl GtpInteractor for GtpClient {
         image_url: String,
     ) -> Result<AStr> {
         let value = self.get_image_value(text, image_url).await?;
-        self.get_value_completion(user_id, value, ModelMode::Fast)
-            .await
+        match self
+            .get_value_completion(user_id, value, ModelMode::Fast)
+            .await?
+        {
+            CompletionResult::Text(t) => Ok(t),
+            CompletionResult::Image(_) => {
+                bail!("unexpected image result from image completion")
+            }
+        }
     }
 
     async fn get_image_smart_completion(
@@ -287,63 +514,14 @@ impl GtpInteractor for GtpClient {
         image_url: String,
     ) -> Result<AStr> {
         let value = self.get_image_value(text, image_url).await?;
-        self.get_value_completion(user_id, value, ModelMode::Smart)
-            .await
-    }
-
-    async fn get_image(&self, user_id: i64, prompt: &str) -> Result<Vec<u8>> {
-        let dalle_request = ImageGenerationRequest::new(
-            "gpt-image-1",
-            prompt,
-            1,
-            "1024x1024",
-            "high",
-            "low",
-        );
-
-        let response = self
-            .http_client
-            .post(&self.dalle_url)
-            .bearer_auth(self.token)
-            .json(&dalle_request)
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let mut completion = response.json::<GptImageResponse>().await?;
-            let response = completion
-                .data
-                .pop()
-                .ok_or(anyhow!("no image data found in response"))?;
-            let data_url =
-                format!("data:image/png;base64,{}", &response.b64_json);
-
-            let anwer_message = Message::User(Value::Complex(vec![
-                Content::Text {
-                    text: format!("По запросу '{prompt}' ты нарисовал:").into(),
-                },
-                Content::ImageUrl {
-                    image_url: Url::new(data_url.into()),
-                },
-            ]));
-
-            {
-                let mut messages = self
-                    .messages
-                    .entry(user_id)
-                    .or_insert_with(|| self.base_rules.clone());
-                messages.push(anwer_message);
+        match self
+            .get_value_completion(user_id, value, ModelMode::Smart)
+            .await?
+        {
+            CompletionResult::Text(t) => Ok(t),
+            CompletionResult::Image(_) => {
+                bail!("unexpected image result from image completion")
             }
-
-            let result = general_purpose::STANDARD
-                .decode(response.b64_json.as_bytes())
-                .with_context(|| {
-                    format!("decode image {}", response.b64_json)
-                })?;
-
-            Ok(result)
-        } else {
-            bail!(response.text().await?)
         }
     }
 
@@ -374,12 +552,12 @@ pub trait GtpInteractor {
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<AStr>;
+    ) -> Result<CompletionResult>;
     async fn get_smart_completion(
         &self,
         user_id: i64,
         prompt: String,
-    ) -> Result<AStr>;
+    ) -> Result<CompletionResult>;
     async fn get_image_completion(
         &self,
         user_id: i64,
@@ -393,8 +571,6 @@ pub trait GtpInteractor {
         text: String,
         image_url: String,
     ) -> Result<AStr>;
-
-    async fn get_image(&self, user_id: i64, prompt: &str) -> Result<Vec<u8>>;
 
     async fn get_audio(&self, prompt: &str) -> Result<Vec<u8>>;
 }
@@ -466,7 +642,92 @@ mod tests {
 
         // Assert the result is as expected
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_ref(), "This is a test response");
+        let CompletionResult::Text(text) = result.unwrap() else {
+            panic!("expected Text result");
+        };
+        assert_eq!(text.as_ref(), "This is a test response");
+    }
+
+    #[tokio::test]
+    async fn test_get_completion_with_tool_call() {
+        let mock_server = MockServer::start().await;
+
+        let tool_call_response = r#"{
+            "id": "test-id",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "generate_image",
+                                    "arguments": "{\"prompt\":\"a red cat\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        }"#;
+
+        let image_b64 = general_purpose::STANDARD.encode(b"PNG_BYTES");
+        let dalle_response =
+            format!(r#"{{"data": [{{"b64_json": "{}"}}]}}"#, image_b64);
+
+        // First call returns tool_calls, second call never happens
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(tool_call_response),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/images/generations"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(dalle_response),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let chat_url = format!("{}/v1/chat/completions", mock_server.uri());
+        let dalle_url = format!("{}/v1/images/generations", mock_server.uri());
+
+        let client = GtpClient {
+            token: "test-token",
+            model: "test-model",
+            voice: "test-voice",
+            smart_model: "test-smart-model",
+            http_client: reqwest::Client::new(),
+            chat_url,
+            dalle_url,
+            messages: DashMap::new(),
+            base_rules: Vec::new(),
+        };
+
+        let result = client
+            .get_completion(42, "draw a red cat".to_string())
+            .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+        let CompletionResult::Image(bytes) = result.unwrap() else {
+            panic!("expected Image result");
+        };
+        assert_eq!(bytes, b"PNG_BYTES");
     }
 
     #[tokio::test]
@@ -537,16 +798,18 @@ mod tests {
 
         // Test the get_completion method
         let result = client.get_completion(0, "Test prompt".to_string()).await;
-
-        // Assert the result is as expected
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_ref(), "This is a test response");
+        let CompletionResult::Text(text) = result.unwrap() else {
+            panic!("expected Text result");
+        };
+        assert_eq!(text.as_ref(), "This is a test response");
 
         let result = client.get_completion(0, "Test prompt".to_string()).await;
-
-        // Assert the result is as expected
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().as_ref(), "This is a test response");
+        let CompletionResult::Text(text) = result.unwrap() else {
+            panic!("expected Text result");
+        };
+        assert_eq!(text.as_ref(), "This is a test response");
     }
 
     #[tokio::test]
