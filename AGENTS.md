@@ -24,11 +24,13 @@ AWS Lambda HTTP Event (Telegram webhook)
   process_message  (concurrent via tokio::try_join!)
         ├── wait_loop: heartbeat "still thinking" messages
         └── process_message_internal
-                ├── photo → GtpInteractor::get_image_completion
-                └── text
-                        ├── "подумай" keyword → GtpInteractor::get_smart_completion
-                        └── default → GtpInteractor::get_completion
-                           (model may issue `generate_image` tool call)
+            ├── photo
+            │     ├── private + "подумай" → GtpInteractor::get_image_smart_completion
+            │     └── default → GtpInteractor::get_image_completion
+            └── text
+                  ├── private + "подумай" keyword → GtpInteractor::get_smart_completion
+                  └── default → GtpInteractor::get_completion
+                     (model may issue `generate_image` tool call)
         │
         ▼
   TelegramInteractor  (tg_client.rs)
@@ -45,7 +47,9 @@ AWS Lambda HTTP Event (Telegram webhook)
 ### `main.rs` — Entry Point
 
 - In **release** mode: registers `function_handler` as an AWS Lambda HTTP handler via `lambda_http::run`.
-- In **debug** mode: loads `message.json` and calls `process_message` directly for local testing.
+- In **debug** mode:
+      - default: loads `message.json` and calls `process_message` directly for local testing.
+      - with `--console`: starts interactive stdin chat mode (type prompt + Enter, `quit`/`exit` to stop).
 - Initializes structured logging: pretty (dev) or JSON (Lambda / CloudWatch).
 - Builds `AppConfig` and delegates to `TgBot`.
 
@@ -57,8 +61,11 @@ AWS Lambda HTTP Event (Telegram webhook)
 
 Key responsibilities:
 - Reads tokens, models, allowed chat IDs, bot aliases, preamble templates, dummy answers, voice settings, and heartbeat intervals.
+- Supports separate private-chat OpenAI endpoint/model/token/rules (`GPT_PRIVATE_CHAT_URL`, `GPT_PRIVATE_MODEL`, `GPT_PRIVATE_TOKEN`, `PRIVATE_GPT_RULES`).
 - Optionally fetches additional GPT base rules from S3 (`S3_RULES_URI`) and appends them to `GPT_RULES`.
-- Constructs the fully-wired `TgBot` instance: two `GtpClient`s (public/private), one `TgClient`, and `Config`.
+- Constructs the fully-wired bot instances:
+      - `build_tg_bot()` for Telegram runtime (`TgClient`)
+      - `build_console_tg_bot()` for local interactive runtime (`ConsoleClient`)
 
 ---
 
@@ -144,6 +151,13 @@ Key types:
 | `leave_chat` | Makes the bot leave a group chat |
 
 **`TgClient`** uses `reqwest_middleware` with exponential backoff retry (2–10s, 3 retries). `send_message` handles MarkdownV2 escaping via `escape_text()` (using a compile-time `phf` set of special characters) and splits oversized messages into safe chunks.
+
+**`ConsoleClient`** is a local debug transport implementing the same `TelegramInteractor` trait:
+- `send_message` prints text to stdout
+- `send_image` prints a `data:image/png;base64,...` URL
+- `send_voice` prints byte-length metadata
+- `leave_chat` prints a marker line
+- `get_file_url` is intentionally unsupported
 
 Key Telegram data types: `Update`, `Message`, `User`, `Chat`, `PhotoSize`, `FileMetadata`.
 

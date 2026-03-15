@@ -1,114 +1,99 @@
 # GPT Telegram Bot
 
-A Rust-based Telegram bot that integrates with OpenAI's GPT models to provide AI-powered conversations, image generation, and audio responses.
+Rust Telegram bot for AWS Lambda with OpenAI chat/vision/image/voice support.
 
 ## Features
 
-- Text completion using GPT models
-- Handles both private chats and group mentions
-- Image generation via DALL-E 3
-- Voice message support with text-to-speech
-- Smart context handling for conversations
-- Support for different GPT models (regular and "smart" models)
-- Filtering for allowed chat IDs
-- Image understanding with GPT Vision
+- Text chat with per-chat conversation history
+- Group and private chat handling with allow-list checks
+- Smart-model routing via the "подумай" keyword
+- Image generation through model tool calls (`generate_image`)
+- Vision support for photo messages
+- Text-to-speech voice responses
+- Optional heartbeat "still thinking" messages in private chats
+- Local debug console mode (`--console`)
 
 ## Requirements
 
-- Rust 1.70+ 
-- Telegram Bot API token
-- OpenAI API key
+- Rust 1.70+
+- Telegram bot token
+- OpenAI API token
 
 ## Environment Variables
 
-The following environment variables are required:
+Required:
 
-```
+```env
 TG_TOKEN=your-telegram-bot-token
 GPT_TOKEN=your-openai-api-key
-GPT_MODEL=gpt-3.5-turbo
-GPT_SMART_MODEL=gpt-4
-BOT_ALIAS=your-bot-name
+GPT_MODEL=gpt-4o-mini
+GPT_SMART_MODEL=gpt-4o
+BOT_ALIAS=botname1,botname2
 TG_ALLOW_CHATS=123456789,987654321
 GPT_RULES=base-rules-for-gpt
-GPT_PREAMBLE=interaction-preamble
+GPT_PREAMBLE=interaction-preamble-template
 DUMMY_ANSWERS=answer1,answer2
-NAMES_MAP={"John":"Jane"}
+NAMES_MAP={"john":"John"}
 ```
 
-Optional environment variables:
-```
-GPT_CHAT_URL=custom-openai-api-url
-GPT_PRIVATE_CHAT_URL=custom-private-api-url
-GPT_PRIVATE_MODEL=custom-private-model
-GPT_PRIVATE_TOKEN=custom-private-token
+Optional:
+
+```env
+# OpenAI chat endpoint override
+GPT_CHAT_URL=https://api.openai.com/v1/chat/completions
+
+# Private chat model endpoint/profile
+GPT_PRIVATE_CHAT_URL=https://api.openai.com/v1/chat/completions
+GPT_PRIVATE_MODEL=gpt-4o-mini
+GPT_PRIVATE_TOKEN=private-openai-token
+PRIVATE_GPT_RULES=private-chat-rules
+
+# Startup rule enrichment from S3
+S3_RULES_URI=s3://bucket/path/to/rules.txt
+
+# Runtime behavior
 HEARTBEAT_INTERVAL_SECONDS=30
 VOICE=onyx
 ```
 
-## Development
-
-### Build and Run
+## Run
 
 ```bash
-# Build the project
+# build
 cargo build
 
-# Run in development mode
+# run in debug mode using message.json fixture
 cargo run
+
+# run in interactive console mode (debug builds)
+cargo run -- --console
 ```
 
-### Testing
+In console mode, type a prompt and press Enter. Use `quit` or `exit` to stop.
+
+## Test
 
 ```bash
-# Run all tests
 cargo test
-
-# Run specific test
-cargo test gpt_client::tests::test_get_image_completion
 ```
 
-## Deployment
+## Local Debug Modes
 
-This bot is designed to run as an AWS Lambda function. Deploy it using your preferred AWS deployment method.
+- `cargo run`: reads `message.json` and processes it once.
+- `cargo run -- --console`: interactive stdin loop that simulates group-chat routing and prints outgoing bot messages to stdout.
 
-For local development, a `message.json` file in the project root can be used to simulate Telegram updates.
+Console image outputs are printed as `data:image/png;base64,...` URLs.
 
 ## Architecture
 
-The bot consists of several main components:
+- `src/main.rs`: Lambda entrypoint + debug modes
+- `src/config.rs`: env loading and bot wiring factory
+- `src/message_processor.rs`: core routing and response flow
+- `src/gpt_client.rs`: OpenAI client and conversation history
+- `src/tg_client.rs`: Telegram HTTP client + console transport
+- `src/event_handler.rs`: event handling trait abstraction
+- `src/s3_client.rs`: optional S3 rules loader
 
-- `main.rs`: Entry point and Lambda handler
-- `gpt_client.rs`: Handles communication with OpenAI API
-- `tg_client.rs`: Manages Telegram API integration
-- `message_processor.rs`: Core logic for processing messages
-- `event_handler.rs`: Processes incoming webhook events
+## Deployment
 
-## Features in Detail
-
-### Text Conversations
-
-The bot processes text messages and responds using GPT models. It can:
-- Respond to direct messages in private chats
-- Respond when mentioned in group chats
-- Continue conversations with context awareness
-
-### Image Generation
-
-Use the command "нарисуй" followed by a description to generate images with DALL-E.
-
-### Image Understanding
-
-Send an image with a question, and the bot will analyze the image and respond.
-
-### Voice Responses
-
-The bot can convert text responses to voice messages using OpenAI's text-to-speech API.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+Production target is AWS Lambda via webhook events from Telegram.
