@@ -119,7 +119,18 @@ struct Response {
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: ResponseMessage,
-    finish_reason: String,
+    finish_reason: FinishReason,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum FinishReason {
+    Stop,
+    ToolCalls,
+    Length,
+    ContentFilter,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,7 +257,7 @@ impl GtpClient {
                 .request_chat_completion(model, &messages, &tools)
                 .await?;
 
-            if choice.finish_reason == "tool_calls" {
+            if choice.finish_reason == FinishReason::ToolCalls {
                 if let Some(result) = self
                     .handle_tool_calls(user_id, &mut messages, choice)
                     .await?

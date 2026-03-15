@@ -228,7 +228,7 @@ impl TgClient {
 impl ConsoleClient {
     fn image_to_data_url(image: &[u8]) -> String {
         let b64 = general_purpose::STANDARD.encode(image);
-        format!("data:image/png;base64,{b64}")
+        format!("data:image/png;base64, len {}", b64.len())
     }
 }
 
