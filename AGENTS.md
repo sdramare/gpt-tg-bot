@@ -26,9 +26,9 @@ AWS Lambda HTTP Event (Telegram webhook)
         └── process_message_internal
                 ├── photo → GtpInteractor::get_image_completion
                 └── text
-                        ├── draw command ("нарисуй") → GtpInteractor::get_image
                         ├── "подумай" keyword → GtpInteractor::get_smart_completion
                         └── default → GtpInteractor::get_completion
+                           (model may issue `generate_image` tool call)
         │
         ▼
   TelegramInteractor  (tg_client.rs)
@@ -94,7 +94,8 @@ trait EventHandler {
 | `wait_loop` | Sends "still thinking" heartbeat in private chats; cancels when main processing completes |
 | `process_message_internal` | Routes to photo or text handler |
 | `process_text_update` | Ignores URL-only messages; checks `should_answer`; strips bot name prefix |
-| `process_and_answer` | Detects draw command or regular text; selects fast vs. smart GPT model |
+| `process_and_answer` | Routes text requests to GPT; selects fast vs. smart model |
+| `process_text_message` | Handles `CompletionResult`: sends text or image to Telegram |
 | `send_text_response` | In groups: randomly may leave (`num < 20`) or reply with voice (`num > 100`) |
 | `gtp_client()` | Returns private `GtpClient` for DMs, public one for groups |
 | `should_answer()` | Allow-list check AND (private chat OR name prefix OR bot reply) |
@@ -111,20 +112,22 @@ trait EventHandler {
 
 | Method | Description |
 |---|---|
-| `get_completion` | Text completion with fast model |
-| `get_smart_completion` | Text completion with smart model |
+| `get_completion` | Completion with fast model; returns `CompletionResult` (`Text` or tool-generated `Image`) |
+| `get_smart_completion` | Completion with smart model; returns `CompletionResult` (`Text` or tool-generated `Image`) |
 | `get_image_completion` | Vision: analyze a photo with fast model |
 | `get_image_smart_completion` | Vision: analyze a photo with smart model |
-| `get_image` | Generate image via DALL-E (`gpt-image-1`), base64 decoded |
 | `get_audio` | TTS via `tts-1`, returns raw audio bytes |
 
 **`GtpClient`** maintains per-user conversation history in a `DashMap<i64, Vec<Message>>` (keyed by Telegram chat ID), enabling multi-turn conversations. Each call appends the user message and the assistant reply to that history.
 
+Image generation is now modeled as an OpenAI tool call (`generate_image`) inside chat completions. When the model requests that tool, `GtpClient` executes image generation through the images endpoint, returns image bytes to `message_processor`, and stores the generated image as multimodal content in the same chat history.
+
 Key types:
-- `Message` — role-tagged (`system` / `user` / `assistant`)
+- `Message` — role-tagged messages including `system`, `user`, `assistant` (text/tool-call), and `tool`
 - `Value` — `Plain(String)` or `Complex(Vec<Content>)` (for vision)
-- `Content` — `Text(String)` or `ImageUrl { url, detail }` (base64 data URI)
+- `Content` — `Text(String)` or `ImageUrl` (base64 data URI)
 - `ModelMode` — `Fast` vs `Smart`
+- `CompletionResult` — `Text` or `Image`
 
 ---
 
