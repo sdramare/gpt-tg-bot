@@ -11,6 +11,8 @@ use tracing::info;
 
 type AStr = Arc<str>;
 
+const MAX_TOOL_CALL_ROUNDS: usize = 5;
+
 #[derive(Debug, Serialize, Clone)]
 struct FunctionDef {
     name: &'static str,
@@ -25,15 +27,17 @@ struct Tool {
     function: FunctionDef,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct ToolCallFunction {
-    name: String,
-    arguments: String,
+    name: AStr,
+    arguments: AStr,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct ToolCall {
-    id: String,
+    id: AStr,
+    #[serde(rename = "type", default = "default_tool_type")]
+    tool_type: AStr,
     function: ToolCallFunction,
 }
 
@@ -58,32 +62,17 @@ enum Message {
         content: Value,
     },
     #[serde(rename = "assistant")]
-    AssistantText {
+    Assistant {
         content: Value,
     },
     #[serde(rename = "assistant")]
     AssistantToolCall {
-        content: Option<Value>,
-        tool_calls: Vec<SerializedToolCall>,
+        tool_calls: Vec<ToolCall>,
     },
     Tool {
-        tool_call_id: String,
+        tool_call_id: AStr,
         content: Value,
     },
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct SerializedToolCallFunction {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct SerializedToolCall {
-    id: String,
-    #[serde(rename = "type")]
-    tool_type: &'static str,
-    function: SerializedToolCallFunction,
 }
 
 #[derive(Debug, Serialize, Deserialize, Constructor, From, Clone)]
@@ -117,26 +106,25 @@ struct Response {
 }
 
 #[derive(Debug, Deserialize)]
-struct Choice {
-    message: ResponseMessage,
-    finish_reason: FinishReason,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum FinishReason {
-    Stop,
-    ToolCalls,
-    Length,
-    ContentFilter,
+#[serde(tag = "finish_reason", rename_all = "snake_case")]
+enum Choice {
+    #[serde(rename = "stop")]
+    Content {
+        message: ContentResponse,
+    },
+    ToolCalls {
+        message: ToolCallsResponse,
+    },
     #[serde(other)]
-    Unknown,
+    Other,
+}
+#[derive(Debug, Deserialize)]
+struct ContentResponse {
+    content: AStr,
 }
 
 #[derive(Debug, Deserialize)]
-struct ResponseMessage {
-    content: Option<String>,
-    #[serde(default)]
+struct ToolCallsResponse {
     tool_calls: Vec<ToolCall>,
 }
 
@@ -184,6 +172,10 @@ struct AudioSpeechRequest<'a> {
 enum ModelMode {
     Fast,
     Smart,
+}
+
+fn default_tool_type() -> AStr {
+    "function".into()
 }
 
 fn make_generate_image_tool() -> Tool {
@@ -252,27 +244,43 @@ impl GtpClient {
 
         let model = self.model_for(mode);
 
-        loop {
+        for _ in 0..MAX_TOOL_CALL_ROUNDS {
             let choice = self
                 .request_chat_completion(model, &messages, &tools)
                 .await?;
 
-            if choice.finish_reason == FinishReason::ToolCalls {
-                if let Some(result) = self
-                    .handle_tool_calls(user_id, &mut messages, choice)
-                    .await?
-                {
-                    return Ok(result);
+            match choice {
+                Choice::Content {
+                    message: content_response,
+                } => {
+                    return Ok(self.finalize_text_response(
+                        user_id,
+                        &mut messages,
+                        content_response.content,
+                    ));
                 }
-                continue;
+                Choice::ToolCalls {
+                    message: tool_calls_response,
+                } => {
+                    if let Some(result) = self
+                        .handle_tool_calls(
+                            user_id,
+                            &mut messages,
+                            tool_calls_response.tool_calls,
+                        )
+                        .await?
+                    {
+                        return Ok(result);
+                    }
+                    continue;
+                }
+                Choice::Other => bail!("unexpected finish reason in choice"),
             }
-
-            return Ok(self.finalize_text_response(
-                user_id,
-                &mut messages,
-                choice,
-            ));
         }
+        bail!(
+            "Failed to get a valid completion after {} attempts",
+            MAX_TOOL_CALL_ROUNDS
+        );
     }
 
     fn user_messages(&self, user_id: i64) -> Vec<Message> {
@@ -316,17 +324,14 @@ impl GtpClient {
         &self,
         user_id: i64,
         messages: &mut Vec<Message>,
-        choice: Choice,
+        tool_calls: Vec<ToolCall>,
     ) -> Result<Option<CompletionResult>> {
-        let tool_calls = choice.message.tool_calls;
-        let serialized = Self::serialize_tool_calls(&tool_calls);
         messages.push(Message::AssistantToolCall {
-            content: None,
-            tool_calls: serialized,
+            tool_calls: tool_calls.clone(),
         });
 
         for tool_call in tool_calls {
-            if tool_call.function.name != "generate_image" {
+            if tool_call.function.name.as_ref() != "generate_image" {
                 continue;
             }
 
@@ -338,22 +343,6 @@ impl GtpClient {
         }
 
         Ok(None)
-    }
-
-    fn serialize_tool_calls(
-        tool_calls: &[ToolCall],
-    ) -> Vec<SerializedToolCall> {
-        tool_calls
-            .iter()
-            .map(|tc| SerializedToolCall {
-                id: tc.id.clone(),
-                tool_type: "function",
-                function: SerializedToolCallFunction {
-                    name: tc.function.name.clone(),
-                    arguments: tc.function.arguments.clone(),
-                },
-            })
-            .collect()
     }
 
     async fn execute_generate_image_call(
@@ -380,7 +369,7 @@ impl GtpClient {
                 format!("Image generated for prompt: '{prompt}'").into(),
             ),
         });
-        messages.push(Message::AssistantText {
+        messages.push(Message::Assistant {
             content: Value::Complex(vec![Content::ImageUrl {
                 image_url: Url::new(data_url.into()),
             }]),
@@ -393,10 +382,9 @@ impl GtpClient {
         &self,
         user_id: i64,
         messages: &mut Vec<Message>,
-        choice: Choice,
+        result: AStr,
     ) -> CompletionResult {
-        let result: AStr = choice.message.content.unwrap_or_default().into();
-        messages.push(Message::AssistantText {
+        messages.push(Message::Assistant {
             content: Value::Plain(result.clone()),
         });
         self.messages.insert(user_id, messages.clone());
