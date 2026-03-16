@@ -1,0 +1,30 @@
+aws_region      = "eu-north-1"
+function_name   = "gpt-tg-bot"
+lambda_role_name = "gpt-tg-bot-role"
+lambda_zip_path = "../target/lambda/gpt-tg-bot/bootstrap.zip"
+
+# Uncomment when you build with arm64:
+# lambda_architectures_override = ["arm64"]
+
+lambda_environment = {
+  BOT_ALIAS              = "@name_bot,Bot"
+  DUMMY_ANSWERS          = "example1,example2"
+  TG_TOKEN               = "replace-me"
+  GPT_TOKEN              = "replace-me"
+  GPT_MODEL              = "gpt-4.1"
+  GPT_SMART_MODEL        = "gpt-5"
+  GPT_RULES              = "replace-me"
+  GPT_PREAMBLE           = "replace-me"
+  TG_ALLOW_CHATS         = "123456789"
+  NAMES_MAP              = "{\"Yury\":\"Yura\"}"
+
+  # Optional keys currently used by live lambda:
+  RUST_BACKTRACE         = "1"
+  GPT_PRIVATE_TOKEN      = "replace-me"
+  PRIVATE_GPT_RULES      = ""
+  GPT_PRIVATE_MODEL      = "gpt-5-mini"
+  GPT_CHAT_URL           = "https://api.openai.com/v1"
+  GPT_PRIVATE_CHAT_URL   = "https://api.openai.com/v1"
+}
+
+lambda_tags = {}

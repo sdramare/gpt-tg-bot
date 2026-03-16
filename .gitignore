@@ -3,3 +3,10 @@
 .env
 message.json
 /.vscode
+/infra/live
+/infra/.terraform
+/infra/*.tfstate
+/infra/*.tfstate.*
+/infra/crash.log
+/infra/terraform.tfvars
+/infra/*.auto.tfvars
