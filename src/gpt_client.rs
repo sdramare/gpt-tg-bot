@@ -139,6 +139,9 @@ pub struct GtpClient {
     model: &'static str,
     voice: &'static str,
     smart_model: &'static str,
+    image_model: &'static str,
+    image_size: Option<&'static str>,
+    image_moderation: Option<&'static str>,
     http_client: reqwest::Client,
     chat_url: String,
     dalle_url: String,
@@ -151,9 +154,12 @@ struct ImageGenerationRequest<'a> {
     model: &'static str,
     prompt: &'a str,
     n: i32,
-    size: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<&'static str>,
     quality: &'static str,
-    moderation: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    moderation: Option<&'static str>,
+    response_format: &'static str,
 }
 
 #[derive(Debug, Deserialize, Constructor)]
@@ -201,10 +207,14 @@ fn make_generate_image_tool() -> Tool {
 }
 
 impl GtpClient {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         api_url: &'static str,
         model: &'static str,
         smart_model: &'static str,
+        image_model: &'static str,
+        image_size: Option<&'static str>,
+        image_moderation: Option<&'static str>,
         voice: &'static str,
         token: &'static str,
         base_rules: String,
@@ -224,6 +234,9 @@ impl GtpClient {
             model,
             voice,
             smart_model,
+            image_model,
+            image_size,
+            image_moderation,
             http_client,
             chat_url: format!("{}/chat/completions", &api_url),
             dalle_url: format!("{}/images/generations", &api_url),
@@ -427,15 +440,16 @@ impl GtpClient {
     #[tracing::instrument(skip(self))]
     async fn get_image_internal(&self, prompt: &str) -> Result<Vec<u8>> {
         let dalle_request = ImageGenerationRequest::new(
-            "gpt-image-1",
+            self.image_model,
             prompt,
             1,
-            "1024x1024",
+            self.image_size,
             "high",
-            "low",
+            self.image_moderation,
+            "b64_json"
         );
 
-        info!("requesting image generation with model gpt-image-1");
+        info!(model = self.image_model, "requesting image generation");
 
         let response = self
             .http_client
@@ -629,6 +643,9 @@ mod tests {
             model: "test-model",
             voice: "test-voice",
             smart_model: "test-smart-model",
+            image_model: "test-image-model",
+            image_size: None,
+            image_moderation: None,
             http_client,
             chat_url,
             dalle_url,
@@ -650,6 +667,17 @@ mod tests {
     #[tokio::test]
     async fn test_get_completion_with_tool_call() {
         let mock_server = MockServer::start().await;
+
+        struct BodyContainsMatcher {
+            expected_content: String,
+        }
+
+        impl wiremock::Match for BodyContainsMatcher {
+            fn matches(&self, request: &wiremock::Request) -> bool {
+                let body_str = String::from_utf8_lossy(&request.body);
+                body_str.contains(&self.expected_content)
+            }
+        }
 
         let tool_call_response = r#"{
             "id": "test-id",
@@ -698,6 +726,15 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1/images/generations"))
+            .and(BodyContainsMatcher {
+                expected_content: "\"model\":\"test-image-model\"".to_string(),
+            })
+            .and(BodyContainsMatcher {
+                expected_content: "\"size\":\"512x512\"".to_string(),
+            })
+            .and(BodyContainsMatcher {
+                expected_content: "\"moderation\":\"low\"".to_string(),
+            })
             .respond_with(
                 ResponseTemplate::new(200).set_body_string(dalle_response),
             )
@@ -712,6 +749,110 @@ mod tests {
             model: "test-model",
             voice: "test-voice",
             smart_model: "test-smart-model",
+            image_model: "test-image-model",
+            image_size: Some("512x512"),
+            image_moderation: Some("low"),
+            http_client: reqwest::Client::new(),
+            chat_url,
+            dalle_url,
+            messages: DashMap::new(),
+            base_rules: Vec::new(),
+        };
+
+        let result = client
+            .get_completion(42, "draw a red cat".to_string())
+            .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+        let CompletionResult::Image(bytes) = result.unwrap() else {
+            panic!("expected Image result");
+        };
+        assert_eq!(bytes, b"PNG_BYTES");
+    }
+
+    #[tokio::test]
+    async fn test_get_completion_with_tool_call_without_size() {
+        let mock_server = MockServer::start().await;
+
+        struct BodyNotContainsMatcher {
+            unexpected_content: String,
+        }
+
+        impl wiremock::Match for BodyNotContainsMatcher {
+            fn matches(&self, request: &wiremock::Request) -> bool {
+                let body_str = String::from_utf8_lossy(&request.body);
+                !body_str.contains(&self.unexpected_content)
+            }
+        }
+
+        let tool_call_response = r#"{
+            "id": "test-id",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "generate_image",
+                                    "arguments": "{\"prompt\":\"a red cat\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        }"#;
+
+        let image_b64 = general_purpose::STANDARD.encode(b"PNG_BYTES");
+        let dalle_response =
+            format!(r#"{{"data": [{{"b64_json": "{}"}}]}}"#, image_b64);
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(tool_call_response),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/images/generations"))
+            .and(BodyNotContainsMatcher {
+                unexpected_content: "\"size\"".to_string(),
+            })
+            .and(BodyNotContainsMatcher {
+                unexpected_content: "\"moderation\"".to_string(),
+            })
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(dalle_response),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let chat_url = format!("{}/v1/chat/completions", mock_server.uri());
+        let dalle_url = format!("{}/v1/images/generations", mock_server.uri());
+
+        let client = GtpClient {
+            token: "test-token",
+            model: "test-model",
+            voice: "test-voice",
+            smart_model: "test-smart-model",
+            image_model: "test-image-model",
+            image_size: None,
+            image_moderation: None,
             http_client: reqwest::Client::new(),
             chat_url,
             dalle_url,
@@ -790,6 +931,9 @@ mod tests {
             api_url.leak(),
             "test-model",
             "test-smart-model",
+            "test-image-model",
+            None,
+            None,
             "test-voice",
             "test-token",
             rules,
@@ -891,6 +1035,9 @@ mod tests {
             model: "test-model",
             voice: "test-voice",
             smart_model: "test-smart-model",
+            image_model: "test-image-model",
+            image_size: None,
+            image_moderation: None,
             http_client,
             chat_url,
             dalle_url,

@@ -23,6 +23,9 @@ lambda_environment = {
   GPT_PRIVATE_TOKEN      = "replace-me"
   PRIVATE_GPT_RULES      = ""
   GPT_PRIVATE_MODEL      = "gpt-5-mini"
+  GPT_IMAGE_MODEL        = "gpt-image-1"
+  GPT_IMAGE_SIZE         = ""
+  GPT_IMAGE_MODERATION   = ""
   GPT_CHAT_URL           = "https://api.openai.com/v1"
   GPT_PRIVATE_CHAT_URL   = "https://api.openai.com/v1"
 }

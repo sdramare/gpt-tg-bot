@@ -37,3 +37,5 @@ Required environment variables are loaded from `.env` file in debug mode:
 - `GPT_PREAMBLE` - Preamble for GPT requests
 - `DUMMY_ANSWERS` - Comma-separated list of dummy answers
 - `S3_RULES_URI` - (Optional) S3 URI (`s3://bucket/key`) to load additional model base rules, appended to `GPT_RULES`. Falls back to `GPT_RULES` only on failure.
+- `GPT_IMAGE_SIZE` - (Optional) Image size for image generation requests; when empty or unset the `size` field is omitted.
+- `GPT_IMAGE_MODERATION` - (Optional) Image moderation setting for image generation requests; when empty or unset the `moderation` field is omitted.

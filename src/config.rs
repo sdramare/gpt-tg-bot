@@ -18,12 +18,16 @@ macro_rules! context_env {
 
 const DEFAULT_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_VOICE: &str = "onyx";
+const DEFAULT_IMAGE_MODEL: &str = "gpt-image-1";
 
 pub struct AppConfig {
     pub tg_token: String,
     pub gpt_token: &'static str,
     pub gpt_model: &'static str,
     pub gpt_smart_model: &'static str,
+    pub gpt_image_model: &'static str,
+    pub gpt_image_size: Option<&'static str>,
+    pub gpt_image_moderation: Option<&'static str>,
     pub base_rules: String,
     pub private_base_rules: String,
     pub gtp_preamble: String,
@@ -50,6 +54,28 @@ impl AppConfig {
         let gpt_token = context_env!("GPT_TOKEN").leak();
         let gpt_model = context_env!("GPT_MODEL").leak();
         let gpt_smart_model = context_env!("GPT_SMART_MODEL").leak();
+        let gpt_image_model = std::env::var("GPT_IMAGE_MODEL")
+            .map(|s| s.leak() as &'static str)
+            .unwrap_or(DEFAULT_IMAGE_MODEL);
+        let gpt_image_size =
+            std::env::var("GPT_IMAGE_SIZE").ok().and_then(|size| {
+                let trimmed = size.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string().leak() as &'static str)
+                }
+            });
+        let gpt_image_moderation = std::env::var("GPT_IMAGE_MODERATION")
+            .ok()
+            .and_then(|moderation| {
+                let trimmed = moderation.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string().leak() as &'static str)
+                }
+            });
         let mut base_rules = context_env!("GPT_RULES");
 
         if let Ok(s3_uri) = std::env::var("S3_RULES_URI")
@@ -120,6 +146,9 @@ impl AppConfig {
             gpt_token,
             gpt_model,
             gpt_smart_model,
+            gpt_image_model,
+            gpt_image_size,
+            gpt_image_moderation,
             base_rules,
             private_base_rules,
             gtp_preamble,
@@ -143,6 +172,9 @@ impl AppConfig {
             self.api_url,
             self.gpt_model,
             self.gpt_smart_model,
+            self.gpt_image_model,
+            self.gpt_image_size,
+            self.gpt_image_moderation,
             self.voice,
             self.gpt_token,
             self.base_rules,
@@ -152,6 +184,9 @@ impl AppConfig {
             self.private_api_url,
             self.private_model,
             self.gpt_smart_model,
+            self.gpt_image_model,
+            self.gpt_image_size,
+            self.gpt_image_moderation,
             self.voice,
             self.private_token,
             self.private_base_rules,
@@ -192,6 +227,9 @@ impl AppConfig {
             self.api_url,
             self.gpt_model,
             self.gpt_smart_model,
+            self.gpt_image_model,
+            self.gpt_image_size,
+            self.gpt_image_moderation,
             self.voice,
             self.gpt_token,
             self.base_rules,
@@ -201,6 +239,9 @@ impl AppConfig {
             self.private_api_url,
             self.private_model,
             self.gpt_smart_model,
+            self.gpt_image_model,
+            self.gpt_image_size,
+            self.gpt_image_moderation,
             self.voice,
             self.private_token,
             self.private_base_rules,
@@ -238,6 +279,9 @@ mod tests {
             gpt_token: "test-gpt-token",
             gpt_model: "gpt-4",
             gpt_smart_model: "gpt-4-turbo",
+            gpt_image_model: "gpt-image-1",
+            gpt_image_size: None,
+            gpt_image_moderation: None,
             base_rules: "Be helpful.".to_string(),
             private_base_rules: String::new(),
             gtp_preamble: "Hello".to_string(),

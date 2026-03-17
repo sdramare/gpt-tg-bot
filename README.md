@@ -42,6 +42,17 @@ Optional:
 # OpenAI chat endpoint override
 GPT_CHAT_URL=https://api.openai.com/v1/chat/completions
 
+# OpenAI image generation model override (default: gpt-image-1)
+GPT_IMAGE_MODEL=gpt-image-1
+
+# Optional image size for image generation requests.
+# Empty value means the size field is omitted from the request.
+GPT_IMAGE_SIZE=1024x1024
+
+# Optional image moderation for image generation requests.
+# Empty value means the moderation field is omitted from the request.
+GPT_IMAGE_MODERATION=low
+
 # Private chat model endpoint/profile
 GPT_PRIVATE_CHAT_URL=https://api.openai.com/v1/chat/completions
 GPT_PRIVATE_MODEL=gpt-4o-mini
