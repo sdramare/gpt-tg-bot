@@ -2,6 +2,12 @@ aws_region      = "eu-north-1"
 function_name   = "gpt-tg-bot"
 lambda_role_name = "gpt-tg-bot-role"
 lambda_zip_path = "../target/lambda/gpt-tg-bot/bootstrap.zip"
+lambda_log_group_name = "/aws/lambda/gpt-tg-bot"
+
+# Optional local rules file uploaded to private S3. Keep empty to disable.
+gpt_rules_file_path = ""
+# Optional S3 object key for uploaded rules.
+# gpt_rules_object_key = "gpt-rules.txt"
 
 # Uncomment when you build with arm64:
 # lambda_architectures_override = ["arm64"]

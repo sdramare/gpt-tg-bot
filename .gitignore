@@ -8,5 +8,6 @@ message.json
 /infra/*.tfstate
 /infra/*.tfstate.*
 /infra/crash.log
-/infra/terraform.tfvars
+/infra/*.tfvars
 /infra/*.auto.tfvars
+/infra/promts/*

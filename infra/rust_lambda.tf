@@ -37,6 +37,24 @@ variable "lambda_zip_path" {
   default     = "../target/lambda/gpt-tg-bot/bootstrap.zip"
 }
 
+variable "lambda_log_group_name" {
+  description = "CloudWatch log group name for lambda"
+  type        = string
+  default     = ""
+}
+
+variable "gpt_rules_file_path" {
+  description = "Local path to a GPT rules file uploaded to S3. Leave empty to disable S3 upload."
+  type        = string
+  default     = ""
+}
+
+variable "gpt_rules_object_key" {
+  description = "S3 object key for the uploaded GPT rules file."
+  type        = string
+  default     = "gpt-rules.txt"
+}
+
 variable "lambda_architectures_override" {
   description = "Optional architecture override, for example [\"arm64\"]"
   type        = list(string)
@@ -73,6 +91,8 @@ variable "lambda_tags" {
   default     = {}
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
   lambda_runtime            = "provided.al2023"
   lambda_handler            = "bootstrap"
@@ -80,8 +100,15 @@ locals {
   lambda_memory_size        = 128
   lambda_timeout_seconds    = 120
   lambda_ephemeral_storage  = 512
-  lambda_log_group_name     = "/aws/lambda/gpt-tg-bot"
+  lambda_log_group_name_in  = trimspace(var.lambda_log_group_name)
+  lambda_log_group_name     = local.lambda_log_group_name_in != "" ? local.lambda_log_group_name_in : "/aws/lambda/${var.function_name}"
   lambda_log_retention_days = 30
+  gpt_rules_file_path       = trimspace(var.gpt_rules_file_path)
+  gpt_rules_object_key      = trimspace(var.gpt_rules_object_key)
+  gpt_rules_enabled         = local.gpt_rules_file_path != ""
+  gpt_rules_bucket_base     = "${lower(replace(var.function_name, "/[^a-z0-9-]/", "-"))}-rules-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+  gpt_rules_bucket_name     = trim(substr(local.gpt_rules_bucket_base, 0, 63), "-")
+  gpt_rules_s3_uri          = "s3://${local.gpt_rules_bucket_name}/${local.gpt_rules_object_key}"
 }
 
 data "aws_iam_policy_document" "lambda_assume_role" {
@@ -94,6 +121,69 @@ data "aws_iam_policy_document" "lambda_assume_role" {
     }
 
     actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_s3_bucket" "gpt_rules" {
+  count  = local.gpt_rules_enabled ? 1 : 0
+  bucket = local.gpt_rules_bucket_name
+
+  tags = merge(
+    var.lambda_tags,
+    {
+      Name = local.gpt_rules_bucket_name
+    }
+  )
+}
+
+resource "aws_s3_bucket_public_access_block" "gpt_rules" {
+  count  = local.gpt_rules_enabled ? 1 : 0
+  bucket = aws_s3_bucket.gpt_rules[0].id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_ownership_controls" "gpt_rules" {
+  count  = local.gpt_rules_enabled ? 1 : 0
+  bucket = aws_s3_bucket.gpt_rules[0].id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_object" "gpt_rules" {
+  count  = local.gpt_rules_enabled ? 1 : 0
+  bucket = aws_s3_bucket.gpt_rules[0].id
+  key    = local.gpt_rules_object_key
+  source = local.gpt_rules_file_path
+
+  source_hash  = filebase64sha256(local.gpt_rules_file_path)
+  content_type = "text/plain"
+
+  tags = var.lambda_tags
+
+  depends_on = [
+    aws_s3_bucket_public_access_block.gpt_rules,
+    aws_s3_bucket_ownership_controls.gpt_rules
+  ]
+}
+
+data "aws_iam_policy_document" "lambda_s3_rules_readonly" {
+  count = local.gpt_rules_enabled ? 1 : 0
+
+  statement {
+    sid    = "ReadGptRulesObject"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject"
+    ]
+    resources = [
+      "${aws_s3_bucket.gpt_rules[0].arn}/${local.gpt_rules_object_key}"
+    ]
   }
 }
 
@@ -114,6 +204,13 @@ resource "aws_iam_role_policy_attachment" "lambda_managed" {
 
   role       = aws_iam_role.lambda.name
   policy_arn = each.value
+}
+
+resource "aws_iam_role_policy" "lambda_s3_rules_readonly" {
+  count  = local.gpt_rules_enabled ? 1 : 0
+  name   = "${var.lambda_role_name}-s3-rules-readonly"
+  role   = aws_iam_role.lambda.id
+  policy = data.aws_iam_policy_document.lambda_s3_rules_readonly[0].json
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {
@@ -141,7 +238,12 @@ resource "aws_lambda_function" "this" {
   timeout     = local.lambda_timeout_seconds
 
   environment {
-    variables = var.lambda_environment
+    variables = merge(
+      var.lambda_environment,
+      local.gpt_rules_enabled ? {
+        S3_RULES_URI = local.gpt_rules_s3_uri
+      } : {}
+    )
   }
 
   ephemeral_storage {
@@ -163,6 +265,7 @@ resource "aws_lambda_function" "this" {
 
   depends_on = [
     aws_iam_role_policy_attachment.lambda_managed,
+    aws_iam_role_policy.lambda_s3_rules_readonly,
     aws_cloudwatch_log_group.lambda
   ]
 }
@@ -171,15 +274,6 @@ resource "aws_lambda_function_url" "this" {
   function_name      = aws_lambda_function.this.function_name
   authorization_type = "NONE"
   invoke_mode        = "BUFFERED"
-}
-
-resource "aws_lambda_permission" "public_function_url" {
-  statement_id = "FunctionURLAllowPublicAccess"
-
-  action                 = "lambda:InvokeFunctionUrl"
-  function_name          = aws_lambda_function.this.function_name
-  principal              = "*"
-  function_url_auth_type = aws_lambda_function_url.this.authorization_type
 }
 
 resource "aws_lambda_runtime_management_config" "this" {
@@ -206,4 +300,14 @@ output "lambda_role_arn" {
 output "lambda_function_url" {
   description = "Function URL"
   value       = aws_lambda_function_url.this.function_url
+}
+
+output "gpt_rules_bucket_name" {
+  description = "S3 bucket used for optional GPT rules upload"
+  value       = local.gpt_rules_enabled ? aws_s3_bucket.gpt_rules[0].id : null
+}
+
+output "s3_rules_uri" {
+  description = "S3 URI set in lambda as S3_RULES_URI when enabled"
+  value       = local.gpt_rules_enabled ? local.gpt_rules_s3_uri : null
 }
