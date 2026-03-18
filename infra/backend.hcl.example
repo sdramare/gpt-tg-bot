@@ -1,0 +1,9 @@
+# Copy this file to infra/backend.hcl and customize values for your account.
+# The local backend.hcl file is gitignored.
+
+bucket               = "tfstate-123456789012-eu-north-1"
+region               = "eu-north-1"
+key                  = "terraform.tfstate"
+workspace_key_prefix = "env:"
+dynamodb_table       = "tfstate-lock"
+encrypt              = true

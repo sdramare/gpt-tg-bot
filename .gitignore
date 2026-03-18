@@ -5,6 +5,9 @@ message.json
 /.vscode
 /infra/live
 /infra/.terraform
+/infra/backend.hcl
+/infra/backend.*.hcl
+/infra/terraform-local-backup-*.json
 /infra/*.tfstate
 /infra/*.tfstate.*
 /infra/crash.log
