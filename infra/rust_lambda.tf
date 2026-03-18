@@ -278,6 +278,14 @@ resource "aws_lambda_function_url" "this" {
   invoke_mode        = "BUFFERED"
 }
 
+resource "aws_lambda_permission" "public_function_url" {
+  statement_id = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.this.function_name
+  principal              = "*"
+  function_url_auth_type = aws_lambda_function_url.this.authorization_type
+}
+
 resource "aws_lambda_runtime_management_config" "this" {
   function_name     = aws_lambda_function.this.function_name
   qualifier         = "$LATEST"

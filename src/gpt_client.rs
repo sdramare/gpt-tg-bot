@@ -159,7 +159,8 @@ struct ImageGenerationRequest<'a> {
     quality: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     moderation: Option<&'static str>,
-    response_format: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<&'static str>,
 }
 
 #[derive(Debug, Deserialize, Constructor)]
@@ -439,6 +440,11 @@ impl GtpClient {
 
     #[tracing::instrument(skip(self))]
     async fn get_image_internal(&self, prompt: &str) -> Result<Vec<u8>> {
+        let reponse_format = if self.image_moderation.is_some() {
+            None
+        } else {
+            Some("b64_json")
+        };
         let dalle_request = ImageGenerationRequest::new(
             self.image_model,
             prompt,
@@ -446,7 +452,7 @@ impl GtpClient {
             self.image_size,
             "high",
             self.image_moderation,
-            "b64_json"
+            reponse_format,
         );
 
         info!(model = self.image_model, "requesting image generation");
