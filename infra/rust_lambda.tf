@@ -279,7 +279,7 @@ resource "aws_lambda_function_url" "this" {
 }
 
 resource "aws_lambda_permission" "public_function_url" {
-  statement_id = "FunctionURLAllowPublicAccess"
+  statement_id = "${aws_lambda_function.this.function_name}-FunctionURLAllowPublicAccess"
   action                 = "lambda:InvokeFunctionUrl"
   function_name          = aws_lambda_function.this.function_name
   principal              = "*"
