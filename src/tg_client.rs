@@ -20,7 +20,7 @@ const MAX_MSG_SIZE: usize = 4096;
 
 static ESCAPE_UNARY_SYMBOLS: phf::Set<char> = phf::phf_set! {
     '_', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|','\\',
-    '{', '}', '.', '!',
+    '{', '}', '.', '!', '`',
 };
 
 static ESCAPE_PAIR_SYMBOLS: phf::Set<char> = phf::phf_set! {
@@ -216,6 +216,9 @@ impl TgClient {
             let res = self.send_text(chat_id, chunk, parse_mode).await;
             if res.is_err() {
                 j -= 2;
+                while !result_text.is_char_boundary(j) && j > i {
+                    j -= 1;
+                }
                 let chunk = &result_text[i..j];
                 self.send_text(chat_id, chunk, parse_mode).await?;
             }
@@ -404,7 +407,13 @@ pub trait TelegramInteractor: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use crate::tg_client::{ConsoleClient, escape_text};
+    use reqwest_middleware::ClientBuilder;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::tg_client::{
+        ConsoleClient, MAX_MSG_SIZE, TgClient, escape_text,
+    };
 
     #[tokio::test]
     async fn test_escape_text() {
@@ -425,6 +434,48 @@ mod tests {
         let text = "Hello **world**!";
         let escaped_text = escape_text(text);
         assert_eq!(escaped_text, "Hello **world**\\!");
+    }
+
+    #[tokio::test]
+    async fn test_escape_text_with_backticks() {
+        let text = "Use `code`.";
+        let escaped_text = escape_text(text);
+        assert_eq!(escaped_text, "Use \\`code\\`\\.");
+    }
+
+    #[tokio::test]
+    async fn test_send_message_by_chunks_retry_utf8_boundary() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/sendMessage"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("tg error"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let tg_client = TgClient {
+            http_client: ClientBuilder::new(reqwest::Client::new()).build(),
+            send_message_url: format!("{}/sendMessage", mock_server.uri()),
+            send_image_url: format!("{}/sendPhoto", mock_server.uri()),
+            send_voice_url: format!("{}/sendVoice", mock_server.uri()),
+            left_url: format!("{}/leaveChat", mock_server.uri()),
+            get_file_url: format!("{}/getFile", mock_server.uri()),
+            download_file_url: format!("{}/file", mock_server.uri()),
+        };
+
+        // Build text so the first chunk ends exactly at a UTF-8 boundary.
+        // On retry the current code subtracts 2 bytes and can cut inside '€'.
+        let mut text = "a".repeat(MAX_MSG_SIZE - 3);
+        text.push('€');
+        text.push('b');
+
+        let result = tg_client
+            .send_message_by_chunks(1, Some("MarkdownV2"), &text)
+            .await;
+
+        assert!(result.is_err());
     }
 
     #[test]

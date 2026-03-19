@@ -331,7 +331,11 @@ impl GtpClient {
         }
 
         let mut completion = response.json::<Response>().await?;
-        Ok(completion.choices.swap_remove(0))
+        let result = completion
+            .choices
+            .pop()
+            .ok_or_else(|| anyhow!("no choices in response"))?;
+        Ok(result)
     }
 
     async fn handle_tool_calls(
@@ -668,6 +672,48 @@ mod tests {
             panic!("expected Text result");
         };
         assert_eq!(text.as_ref(), "This is a test response");
+    }
+
+    #[tokio::test]
+    async fn test_get_completion_with_empty_choices_returns_error() {
+        let mock_server = MockServer::start().await;
+
+        let response_body = r#"{
+            "id": "test-id",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "test-model",
+            "choices": []
+        }"#;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(response_body),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let chat_url = format!("{}/v1/chat/completions", mock_server.uri());
+        let dalle_url = format!("{}/v1/images/generations", mock_server.uri());
+
+        let client = GtpClient {
+            token: "test-token",
+            model: "test-model",
+            voice: "test-voice",
+            smart_model: "test-smart-model",
+            image_model: "test-image-model",
+            image_size: None,
+            image_moderation: None,
+            http_client: reqwest::Client::new(),
+            chat_url,
+            dalle_url,
+            messages: DashMap::new(),
+            base_rules: Vec::new(),
+        };
+
+        let result = client.get_completion(0, "Test prompt".to_string()).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
