@@ -24,14 +24,25 @@ pub async fn fetch_rules_from_s3(uri: &str) -> Result<String> {
         .key(key)
         .send()
         .await
-        .context("Failed to get S3 object")?;
-    let bytes = resp
-        .body
-        .collect()
-        .await
-        .context("Failed to read S3 response body")?;
+        .with_context(|| {
+            format!(
+                "Failed to get S3 object from bucket '{}' with key '{}'",
+                bucket, key
+            )
+        })?;
+    let bytes = resp.body.collect().await.with_context(|| {
+        format!(
+            "Failed to read S3 response body from bucket '{}' with key '{}'",
+            bucket, key
+        )
+    })?;
     let text = String::from_utf8(bytes.into_bytes().to_vec())
-        .context("S3 object is not valid UTF-8")?;
+        .with_context(|| {
+            format!(
+                "S3 object from bucket '{}' with key '{}' is not valid UTF-8",
+                bucket, key
+            )
+        })?;
     Ok(text)
 }
 
