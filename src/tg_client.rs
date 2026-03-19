@@ -155,10 +155,10 @@ impl TgClient {
                 if let Some(file) = tg_response.result {
                     Ok(file.file_path)
                 } else {
-                    bail!("Bad file id")
+                    bail!("bad file id")
                 }
             } else {
-                bail!("Bad file id")
+                bail!("bad file id")
             }
         } else {
             bail!(response.text().await?)
@@ -184,10 +184,10 @@ impl TgClient {
         if !response.status().is_success() {
             let tg_error = response.text().await?;
             error!(
-                "Telegram send error. Error: {}. Request {}",
+                "telegram send error. Error: {}. Request {}",
                 tg_error, request_data.text
             );
-            let error = format!("Telegram send error. Error: {tg_error}");
+            let error = format!("telegram send error. Error: {tg_error}");
             bail!(error);
         }
         Ok(())
@@ -273,7 +273,7 @@ impl TelegramInteractor for TgClient {
 
         if !response.status().is_success() {
             let error = format!(
-                "Telegram send error. Error: {}.",
+                "telegram send error. Error: {}.",
                 response.text().await?
             );
             bail!(error);
@@ -298,7 +298,7 @@ impl TelegramInteractor for TgClient {
 
         if !response.status().is_success() {
             let error = format!(
-                "Telegram send voice error. Error: {}.",
+                "telegram send voice error. Error: {}.",
                 response.text().await?
             );
             bail!(error);
@@ -307,7 +307,7 @@ impl TelegramInteractor for TgClient {
         let tg_response = response.json::<TgResponse<Message>>().await?;
         if !tg_response.ok {
             bail!(
-                "Tg response error: {}",
+                "tg response error: {}",
                 tg_response.error.unwrap_or_default()
             );
         }
@@ -325,7 +325,7 @@ impl TelegramInteractor for TgClient {
 
         if !response.status().is_success() {
             let error = format!(
-                "Telegram leave chat error. Error: {}.",
+                "telegram leave chat error. Error: {}.",
                 response.text().await?
             );
             bail!(error);
@@ -337,7 +337,7 @@ impl TelegramInteractor for TgClient {
 
 impl TelegramInteractor for ConsoleClient {
     async fn get_file_url(&self, file_id: &str) -> Result<String> {
-        bail!("Console mode does not support file_id: {file_id}")
+        bail!("console mode does not support file_id: {file_id}")
     }
 
     async fn send_message(

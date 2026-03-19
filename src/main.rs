@@ -29,7 +29,7 @@ async fn function_handler(
     if let Err(error) = tg_bot.process_event(&event).await {
         let body = get_request_body(event.body());
         let backtrace = Backtrace::force_capture();
-        error!({ ?body, ?backtrace, error = format!("{:?}", error) }, "Error in request handler");
+        error!({ ?body, ?backtrace, error = format!("{:?}", error) }, "error in request handler");
     };
 
     let resp = Response::builder()
@@ -49,7 +49,7 @@ fn get_request_body(body: &Body) -> &str {
 
 fn init_tracing() {
     if cfg!(debug_assertions) {
-        color_eyre::install().expect("Failed to install color_eyre");
+        color_eyre::install().expect("failed to install color_eyre");
         tracing_subscriber::fmt().pretty().init();
     } else {
         tracing_subscriber::fmt()

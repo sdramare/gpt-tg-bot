@@ -83,14 +83,14 @@ impl AppConfig {
         {
             match fetch_rules_from_s3(&s3_uri).await {
                 Ok(s3_rules) => {
-                    info!("Loaded additional rules from S3: {s3_uri}");
+                    info!("loaded additional rules from S3: {s3_uri}");
                     base_rules.push('\n');
                     base_rules.push_str(&s3_rules);
                 }
                 Err(err) => {
                     warn!(
                         error = format!("{err:#}"),
-                        "Failed to load rules from S3: {s3_uri}, \
+                        "failed to load rules from S3: {s3_uri}, \
                          falling back to GPT_RULES env var only"
                     );
                 }
@@ -102,16 +102,14 @@ impl AppConfig {
 
         let gtp_preamble = context_env!("GPT_PREAMBLE");
 
-        let heartbeat_interval = if let Ok(secs) =
-            std::env::var("HEARTBEAT_INTERVAL_SECONDS")
-        {
-            Some(Duration::from_secs(
-                secs.parse()
-                    .context("HEARTBEAT_INTERVAL_SECONDS must be a number")?,
-            ))
-        } else {
-            None
-        };
+        let heartbeat_interval =
+            if let Ok(secs) = std::env::var("HEARTBEAT_INTERVAL_SECONDS") {
+                Some(Duration::from_secs(secs.parse().context(
+                    "env var HEARTBEAT_INTERVAL_SECONDS must be a number",
+                )?))
+            } else {
+                None
+            };
 
         let voice = std::env::var("VOICE")
             .unwrap_or(DEFAULT_VOICE.to_string())
@@ -217,7 +215,7 @@ impl AppConfig {
         self.tg_bot_allow_chats
             .first()
             .copied()
-            .context("TG_ALLOW_CHATS must contain at least one chat id")
+            .context("env var TG_ALLOW_CHATS must contain at least one chat id")
     }
 
     pub fn build_console_tg_bot(

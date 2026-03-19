@@ -292,7 +292,7 @@ impl GtpClient {
             }
         }
         bail!(
-            "Failed to get a valid completion after {} attempts",
+            "failed to get a valid completion after {} attempts",
             MAX_TOOL_CALL_ROUNDS
         );
     }

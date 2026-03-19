@@ -91,7 +91,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                     let _ = self.tg_client
                     .send_message(chat_id, "Я не знаю что на это ответить", None)
                     .await;
-                    return Err(anyhow::anyhow!("Response timeout"));
+                    return Err(anyhow::anyhow!("response timeout"));
                 },
                 _ = tx.closed() => {
                     break;
@@ -208,7 +208,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             return Err(error);
         }
 
-        info!("Complete");
+        info!("complete");
         Ok(())
     }
 
@@ -239,7 +239,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
                 self.send_text_response(chat, text).in_current_span().await
             }
             CompletionResult::Image(bytes) => {
-                info!("Sending generated image to TG");
+                info!("sending generated image to TG");
                 self.tg_client.send_image(chat.id, bytes).await
             }
         }
@@ -259,11 +259,11 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             prepend
         };
 
-        info!("Ask GPT");
+        info!("ask GPT");
 
         if chat.is_private() && contains_case_insensitive(&text, "подумай")
         {
-            info!("Smart completion");
+            info!("smart completion");
             self.gtp_client(chat)
                 .get_smart_completion(chat.id, text)
                 .in_current_span()
@@ -281,7 +281,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         chat: &Chat,
         result: &str,
     ) -> anyhow::Result<()> {
-        info!("Sending answer to TG");
+        info!("sending answer to TG");
 
         if !chat.is_private() {
             if result.contains("из чата")
@@ -403,7 +403,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     ) -> anyhow::Result<std::sync::Arc<str>> {
         if chat.is_private() && contains_case_insensitive(&text, "подумай")
         {
-            info!("Smart completion");
+            info!("smart completion");
             self.gtp_client(chat)
                 .get_image_smart_completion(chat.id, text, photo_url)
                 .await
@@ -419,7 +419,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         chat: &Chat,
         result: Result<std::sync::Arc<str>, anyhow::Error>,
     ) -> anyhow::Result<()> {
-        info!("Sending answer to TG");
+        info!("sending answer to TG");
 
         match result {
             Ok(result) => {
@@ -451,7 +451,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
             }
         };
 
-        info!("Complete");
+        info!("complete");
         Ok(())
     }
 
@@ -490,11 +490,11 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
         let update: Option<Update> = event.payload()?;
 
         match update.and_then(|x| x.message) {
-            None => bail!(RequestError::new("Message field is missing")),
+            None => bail!(RequestError::new("message field is missing")),
             Some(message) => {
                 let utc = Utc::now().naive_utc();
                 if message.date < (utc - chrono::Duration::minutes(10)) {
-                    warn!(date = ?message.date, "Too old message");
+                    warn!(date = ?message.date, "too old message");
                     return Ok(());
                 }
 

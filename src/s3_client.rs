@@ -3,12 +3,12 @@ use anyhow::{Context, Result};
 pub fn parse_s3_uri(uri: &str) -> Result<(&str, &str)> {
     let path = uri
         .strip_prefix("s3://")
-        .context("S3 URI must start with s3://")?;
+        .context("s3 URI must start with s3://")?;
     let (bucket, key) = path
         .split_once('/')
-        .context("S3 URI must contain bucket and key")?;
+        .context("s3 URI must contain bucket and key")?;
     if bucket.is_empty() || key.is_empty() {
-        anyhow::bail!("S3 URI bucket and key must not be empty");
+        anyhow::bail!("s3 URI bucket and key must not be empty");
     }
     Ok((bucket, key))
 }
@@ -26,20 +26,20 @@ pub async fn fetch_rules_from_s3(uri: &str) -> Result<String> {
         .await
         .with_context(|| {
             format!(
-                "Failed to get S3 object from bucket '{}' with key '{}'",
+                "failed to get S3 object from bucket '{}' with key '{}'",
                 bucket, key
             )
         })?;
     let bytes = resp.body.collect().await.with_context(|| {
         format!(
-            "Failed to read S3 response body from bucket '{}' with key '{}'",
+            "failed to read S3 response body from bucket '{}' with key '{}'",
             bucket, key
         )
     })?;
     let text = String::from_utf8(bytes.into_bytes().to_vec())
         .with_context(|| {
             format!(
-                "S3 object from bucket '{}' with key '{}' is not valid UTF-8",
+                "s3 object from bucket '{}' with key '{}' is not valid UTF-8",
                 bucket, key
             )
         })?;
@@ -96,7 +96,7 @@ mod tests {
         assert!(result.is_err());
         assert!(
             format!("{:#}", result.unwrap_err())
-                .contains("S3 URI must start with s3://")
+                .contains("s3 URI must start with s3://")
         );
     }
 
