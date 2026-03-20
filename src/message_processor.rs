@@ -7,8 +7,8 @@ use derive_more::Constructor;
 use derive_new::new;
 use dyn_fmt::AsStrFormatExt;
 use lambda_http::{Request, RequestPayloadExt};
-use rand::Rng;
-use rand::seq::SliceRandom;
+use rand::RngExt;
+use rand::seq::IndexedRandom;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -32,8 +32,11 @@ pub struct Config {
 }
 
 #[derive(Constructor)]
-pub struct TgBot<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
-{
+pub struct TgBot<
+    TgClient: TelegramInteractor,
+    GtpClient: GtpInteractor,
+    R: RngExt,
+> {
     gtp_client: GtpClient,
     private_gtp_client: GtpClient,
     tg_client: TgClient,
@@ -41,7 +44,7 @@ pub struct TgBot<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     rng: fn() -> R,
 }
 
-impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
+impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: RngExt>
     TgBot<TgClient, GtpClient, R>
 {
     pub async fn process_message(
@@ -457,12 +460,12 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
 
     fn get_random_number(&self) -> i32 {
         let mut rng = (self.rng)();
-        rng.gen_range(0..100)
+        rng.random_range(0..100)
     }
 
     fn get_random_answer(&self) -> Option<&str> {
         let mut rng = (self.rng)();
-        let num = rng.gen_range(0..100);
+        let num = rng.random_range(0..100);
         if num < 30 {
             self.config.dummy_answers.choose(&mut rng).copied()
         } else {
@@ -483,7 +486,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
     }
 }
 
-impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: Rng>
+impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: RngExt>
     EventHandler for TgBot<TgClient, GtpClient, R>
 {
     async fn process_event(&self, event: &Request) -> anyhow::Result<()> {
@@ -578,10 +581,11 @@ pub struct RequestError {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::convert::Infallible;
 
     use chrono::Utc;
     use mockall::predicate::{always, eq};
-    use rand::rngs::mock::StepRng;
+    use rand::TryRng;
 
     use crate::gpt_client::{CompletionResult, MockGtpInteractor};
     use crate::message_processor::contains_case_insensitive;
@@ -590,6 +594,47 @@ mod tests {
     };
 
     use super::{Config, TgBot, should_answer};
+
+    #[derive(Clone)]
+    struct StepRng {
+        next: u64,
+        step: u64,
+    }
+
+    impl StepRng {
+        const fn new(next: u64, step: u64) -> Self {
+            Self { next, step }
+        }
+    }
+
+    impl TryRng for StepRng {
+        type Error = Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(self.try_next_u64()? as u32)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            let out = self.next;
+            self.next = self.next.wrapping_add(self.step);
+            Ok(out)
+        }
+
+        fn try_fill_bytes(
+            &mut self,
+            dst: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            let mut written = 0;
+            while written < dst.len() {
+                let bytes = self.try_next_u64()?.to_le_bytes();
+                let copy_len = (dst.len() - written).min(bytes.len());
+                dst[written..written + copy_len]
+                    .copy_from_slice(&bytes[..copy_len]);
+                written += copy_len;
+            }
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_contains_case_insensitive() {
@@ -736,7 +781,7 @@ mod tests {
 
         tg_client
             .expect_send_message()
-            .with(eq(123), eq("Another dummy answer"), eq(Some("MarkdownV2")))
+            .with(eq(123), eq("Dummy answer"), eq(Some("MarkdownV2")))
             .times(1)
             .returning(|_, _, _| Ok(()));
 

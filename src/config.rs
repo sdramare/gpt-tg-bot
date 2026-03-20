@@ -207,7 +207,7 @@ impl AppConfig {
             private_gtp_client,
             tg_client,
             config,
-            rand::thread_rng,
+            rand::rng,
         )
     }
 
@@ -262,7 +262,7 @@ impl AppConfig {
             private_gtp_client,
             ConsoleClient,
             config,
-            rand::thread_rng,
+            rand::rng,
         )
     }
 }
