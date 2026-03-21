@@ -584,6 +584,7 @@ mod tests {
     use std::convert::Infallible;
 
     use chrono::Utc;
+    use mockall::mock;
     use mockall::predicate::{always, eq};
     use rand::TryRng;
 
@@ -595,45 +596,15 @@ mod tests {
 
     use super::{Config, TgBot, should_answer};
 
-    #[derive(Clone)]
-    struct StepRng {
-        next: u64,
-        step: u64,
-    }
+    mock!{
+        FixedRng {}
+        impl TryRng for FixedRng {
+            type Error = Infallible;
 
-    impl StepRng {
-        const fn new(next: u64, step: u64) -> Self {
-            Self { next, step }
-        }
-    }
-
-    impl TryRng for StepRng {
-        type Error = Infallible;
-
-        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-            Ok(self.try_next_u64()? as u32)
-        }
-
-        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-            let out = self.next;
-            self.next = self.next.wrapping_add(self.step);
-            Ok(out)
-        }
-
-        fn try_fill_bytes(
-            &mut self,
-            dst: &mut [u8],
-        ) -> Result<(), Self::Error> {
-            let mut written = 0;
-            while written < dst.len() {
-                let bytes = self.try_next_u64()?.to_le_bytes();
-                let copy_len = (dst.len() - written).min(bytes.len());
-                dst[written..written + copy_len]
-                    .copy_from_slice(&bytes[..copy_len]);
-                written += copy_len;
-            }
-            Ok(())
-        }
+            fn try_next_u32(&mut self) -> Result<u32, Infallible>;
+            fn try_next_u64(&mut self) -> Result<u64, Infallible>;
+            fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible>;
+        }  
     }
 
     #[test]
@@ -711,10 +682,17 @@ mod tests {
             private_gtp_client,
             tg_client,
             build_test_config(),
-            || StepRng::new(0, 0),
+             || build_rng(50),
         );
         let result = bot.process_message(*message).await;
         assert!(result.is_ok());
+    }
+
+    fn build_rng(res: u32) -> MockFixedRng {
+        let mut rng = MockFixedRng::new();
+        rng.expect_try_next_u32()
+            .returning(move || Ok(res));
+        rng
     }
 
     fn build_test_config() -> Config {
@@ -928,7 +906,7 @@ mod tests {
         tg_client: MockTelegramInteractor,
         gtp_client: MockGtpInteractor,
         public_gtp_client: MockGtpInteractor,
-    ) -> TgBot<MockTelegramInteractor, MockGtpInteractor, StepRng> {
+    ) -> TgBot<MockTelegramInteractor, MockGtpInteractor, MockFixedRng> {
         TgBot::new(
             public_gtp_client,
             gtp_client,
@@ -944,7 +922,7 @@ mod tests {
                 vec![123],
                 vec!["bot_name"],
             ),
-            || StepRng::new(1000000000, 100000000),
+            || build_rng(50),
         )
     }
 
