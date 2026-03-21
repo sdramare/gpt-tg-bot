@@ -47,9 +47,14 @@ dotenvy = "0.15.7"
 log = "0.4.29"
 derive-new = "0.7.0"
 reqwest-retry = "0.9.1"
-reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "query"] }
+reqwest-middleware = { version = "0.5.1", features = [
+    "json",
+    "multipart",
+    "query",
+] }
 color-eyre = "0.6.5"
 base64 = "0.22.1"
 dashmap = "6.1.0"
 aws-config = { version = "1.8.15", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.127.0"
+aws-lc-rs = "1.16.2"
