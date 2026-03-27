@@ -20,6 +20,8 @@ use crate::tg_client::{
     Chat, Message, PRIVATE_CHAT, PhotoSize, TelegramInteractor, Update,
 };
 
+const VOICE_REPLY_THRESHOLD: i32 = 100;
+
 #[derive(new)]
 pub struct Config {
     name_map: HashMap<String, String>,
@@ -303,7 +305,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: RngExt>
             }
 
             let num = self.get_random_number();
-            if num > 100 {
+            if num >= VOICE_REPLY_THRESHOLD {
                 let audio = self
                     .gtp_client(chat)
                     .get_audio(result)
@@ -596,7 +598,7 @@ mod tests {
 
     use super::{Config, TgBot, should_answer};
 
-    mock!{
+    mock! {
         FixedRng {}
         impl TryRng for FixedRng {
             type Error = Infallible;
@@ -604,7 +606,7 @@ mod tests {
             fn try_next_u32(&mut self) -> Result<u32, Infallible>;
             fn try_next_u64(&mut self) -> Result<u64, Infallible>;
             fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible>;
-        }  
+        }
     }
 
     #[test]
@@ -682,7 +684,7 @@ mod tests {
             private_gtp_client,
             tg_client,
             build_test_config(),
-             || build_rng(50),
+            || build_rng(50),
         );
         let result = bot.process_message(*message).await;
         assert!(result.is_ok());
@@ -690,8 +692,7 @@ mod tests {
 
     fn build_rng(res: u32) -> MockFixedRng {
         let mut rng = MockFixedRng::new();
-        rng.expect_try_next_u32()
-            .returning(move || Ok(res));
+        rng.expect_try_next_u32().returning(move || Ok(res));
         rng
     }
 
@@ -792,6 +793,53 @@ mod tests {
             .returning(|_, _, _| Ok(()));
 
         let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message =
+            create_public_message(Some("bot_name Hello".to_string()), None);
+        let result = bot.process_message(message).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_message_sends_voice_when_rng_is_high() {
+        let mut tg_client = MockTelegramInteractor::new();
+        let gtp_client = MockGtpInteractor::new();
+        let mut public_gtp_client = MockGtpInteractor::new();
+
+        public_gtp_client
+            .expect_get_completion()
+            .with(eq(123), eq("preamble Hello".to_string()))
+            .times(1)
+            .returning(|_, _| Ok(CompletionResult::Text("Hello Sir".into())));
+
+        public_gtp_client
+            .expect_get_audio()
+            .with(eq("Hello Sir"))
+            .times(1)
+            .returning(|_| Ok(vec![1, 2, 3]));
+
+        tg_client
+            .expect_send_voice()
+            .with(eq(123), eq(vec![1, 2, 3]))
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let bot = TgBot::new(
+            public_gtp_client,
+            gtp_client,
+            tg_client,
+            Config::new(
+                HashMap::default(),
+                "preamble".to_string(),
+                vec![
+                    "Dummy answer",
+                    "Another dummy answer",
+                    "Yet another dummy answer",
+                ],
+                vec![123],
+                vec!["bot_name"],
+            ),
+            || build_rng(u32::MAX),
+        );
         let message =
             create_public_message(Some("bot_name Hello".to_string()), None);
         let result = bot.process_message(message).await;

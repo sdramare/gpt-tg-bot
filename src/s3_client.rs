@@ -36,8 +36,8 @@ pub async fn fetch_rules_from_s3(uri: &str) -> Result<String> {
             bucket, key
         )
     })?;
-    let text = String::from_utf8(bytes.into_bytes().to_vec())
-        .with_context(|| {
+    let text =
+        String::from_utf8(bytes.into_bytes().to_vec()).with_context(|| {
             format!(
                 "s3 object from bucket '{}' with key '{}' is not valid UTF-8",
                 bucket, key

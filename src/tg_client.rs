@@ -116,6 +116,18 @@ struct FileMetadata {
     file_path: String,
 }
 
+fn prev_char_boundary(
+    result_text: &str,
+    chunk_start: usize,
+    chunk_end: usize,
+) -> Option<usize> {
+    let mut retry_end = chunk_end.saturating_sub(1);
+    while retry_end > chunk_start && !result_text.is_char_boundary(retry_end) {
+        retry_end -= 1;
+    }
+    (retry_end > chunk_start).then_some(retry_end)
+}
+
 impl TgClient {
     pub fn new(token: String) -> Self {
         let url = format!("https://api.telegram.org/bot{token}");
@@ -213,14 +225,15 @@ impl TgClient {
                 j -= 1;
             }
             let chunk = &result_text[i..j];
-            let res = self.send_text(chat_id, chunk, parse_mode).await;
-            if res.is_err() {
-                j -= 2;
-                while !result_text.is_char_boundary(j) && j > i {
-                    j -= 1;
-                }
-                let chunk = &result_text[i..j];
+            if let Err(error) = self.send_text(chat_id, chunk, parse_mode).await
+            {
+                let Some(retry_end) = prev_char_boundary(result_text, i, j)
+                else {
+                    return Err(error);
+                };
+                let chunk = &result_text[i..retry_end];
                 self.send_text(chat_id, chunk, parse_mode).await?;
+                j = retry_end;
             }
             i = j;
         }
@@ -231,7 +244,7 @@ impl TgClient {
 impl ConsoleClient {
     fn image_to_data_url(image: &[u8]) -> String {
         let b64 = general_purpose::STANDARD.encode(image);
-        format!("data:image/png;base64, len {}", b64.len())
+        format!("data:image/png;base64,{b64}")
     }
 }
 
@@ -412,7 +425,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::tg_client::{
-        ConsoleClient, MAX_MSG_SIZE, TgClient, escape_text,
+        ConsoleClient, MAX_MSG_SIZE, TgClient, escape_text, prev_char_boundary,
     };
 
     #[tokio::test]
@@ -476,6 +489,19 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prev_char_boundary_single_char_chunk() {
+        assert_eq!(prev_char_boundary("abc", 2, 3), None);
+        let text = "a€b";
+        assert_eq!(prev_char_boundary(text, 1, 4), None);
+    }
+
+    #[test]
+    fn test_prev_char_boundary_utf8_boundary() {
+        let text = "a€b";
+        assert_eq!(prev_char_boundary(text, 1, 5), Some(4));
     }
 
     #[test]

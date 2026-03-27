@@ -202,13 +202,7 @@ impl AppConfig {
             config.message_delay = heartbeat_interval;
         }
 
-        TgBot::new(
-            gtp_client,
-            private_gtp_client,
-            tg_client,
-            config,
-            rand::rng,
-        )
+        TgBot::new(gtp_client, private_gtp_client, tg_client, config, rand::rng)
     }
 
     pub fn first_allowed_chat_id(&self) -> Result<i64> {
