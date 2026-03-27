@@ -173,7 +173,15 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: RngExt>
             return Ok(());
         }
 
-        let text = used_name.map(|name| text.replace(name, "")).unwrap_or(text);
+        let text = if let Some(name) = used_name {
+            if let Some(rest) = text.strip_prefix(name) {
+                rest.to_string()
+            } else {
+                text
+            }
+        } else {
+            text
+        };
 
         let first_name = self.resolve_first_name(from_first_name);
 
@@ -884,6 +892,33 @@ mod tests {
         let bot = create_bot(tg_client, gtp_client, public_gtp_client);
         let message =
             create_public_message(Some("bot_name Hello".to_string()), None);
+        let result = bot.process_message(message).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_message_strips_only_leading_bot_name() {
+        let mut tg_client = MockTelegramInteractor::new();
+        let gtp_client = MockGtpInteractor::new();
+        let mut public_gtp_client = MockGtpInteractor::new();
+
+        public_gtp_client
+            .expect_get_completion()
+            .with(eq(123), eq("preamble tell bot_name a story".to_string()))
+            .times(1)
+            .returning(|_, _| Ok(CompletionResult::Text("Hello Sir".into())));
+
+        tg_client
+            .expect_send_message()
+            .with(eq(123), eq("Hello Sir"), eq(Some("MarkdownV2")))
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message = create_public_message(
+            Some("bot_name tell bot_name a story".to_string()),
+            None,
+        );
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }
