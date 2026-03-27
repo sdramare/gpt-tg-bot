@@ -19,6 +19,7 @@ macro_rules! context_env {
 const DEFAULT_API_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_VOICE: &str = "onyx";
 const DEFAULT_IMAGE_MODEL: &str = "gpt-image-1";
+const DEFAULT_VOICE_ENABLED: bool = false;
 
 pub struct AppConfig {
     pub tg_token: String,
@@ -32,6 +33,7 @@ pub struct AppConfig {
     pub private_base_rules: String,
     pub gtp_preamble: String,
     pub voice: &'static str,
+    pub voice_enabled: bool,
     pub tg_bot_names: Vec<&'static str>,
     pub dummy_answers: Vec<&'static str>,
     pub tg_bot_allow_chats: Vec<i64>,
@@ -114,6 +116,16 @@ impl AppConfig {
         let voice = std::env::var("VOICE")
             .unwrap_or(DEFAULT_VOICE.to_string())
             .leak();
+        let voice_enabled = match std::env::var("VOICE_ENABLED") {
+            Ok(v) => v
+                .parse::<bool>()
+                .context("env var VOICE_ENABLED must be true or false")?,
+            Err(std::env::VarError::NotPresent) => DEFAULT_VOICE_ENABLED,
+            Err(err) => {
+                return Err(err)
+                    .context("failed to read env var VOICE_ENABLED");
+            }
+        };
 
         let mut tg_bot_allow_chats = Vec::new();
         for chat_id in context_env!("TG_ALLOW_CHATS").split(',') {
@@ -151,6 +163,7 @@ impl AppConfig {
             private_base_rules,
             gtp_preamble,
             voice,
+            voice_enabled,
             tg_bot_names,
             dummy_answers,
             tg_bot_allow_chats,
@@ -201,6 +214,7 @@ impl AppConfig {
         if let Some(heartbeat_interval) = self.heartbeat_interval {
             config.message_delay = heartbeat_interval;
         }
+        config.voice_enabled = self.voice_enabled;
 
         TgBot::new(gtp_client, private_gtp_client, tg_client, config, rand::rng)
     }
@@ -250,6 +264,7 @@ impl AppConfig {
         if let Some(heartbeat_interval) = self.heartbeat_interval {
             config.message_delay = heartbeat_interval;
         }
+        config.voice_enabled = self.voice_enabled;
 
         TgBot::new(
             gtp_client,
@@ -278,6 +293,7 @@ mod tests {
             private_base_rules: String::new(),
             gtp_preamble: "Hello".to_string(),
             voice: "onyx",
+            voice_enabled: false,
             tg_bot_names: vec!["bot"],
             dummy_answers: vec!["idk"],
             tg_bot_allow_chats: vec![1, 2, 3],
@@ -340,6 +356,11 @@ mod tests {
     #[test]
     fn default_voice_value() {
         assert_eq!(DEFAULT_VOICE, "onyx");
+    }
+
+    #[test]
+    fn default_voice_enabled_value() {
+        assert!(!DEFAULT_VOICE_ENABLED);
     }
 
     #[test]

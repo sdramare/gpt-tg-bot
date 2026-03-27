@@ -65,6 +65,8 @@ S3_RULES_URI=s3://bucket/path/to/rules.txt
 # Runtime behavior
 HEARTBEAT_INTERVAL_SECONDS=30
 VOICE=onyx
+# Enable probabilistic voice replies in public chats (default: false)
+VOICE_ENABLED=true
 ```
 
 ## Run

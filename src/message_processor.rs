@@ -20,7 +20,7 @@ use crate::tg_client::{
     Chat, Message, PRIVATE_CHAT, PhotoSize, TelegramInteractor, Update,
 };
 
-const VOICE_REPLY_THRESHOLD: i32 = 100;
+const VOICE_REPLY_THRESHOLD: i32 = 90;
 
 #[derive(new)]
 pub struct Config {
@@ -29,6 +29,8 @@ pub struct Config {
     dummy_answers: Vec<&'static str>,
     tg_bot_allow_chats: Vec<i64>,
     tg_bot_names: Vec<&'static str>,
+    #[new(value = "false")]
+    pub voice_enabled: bool,
     #[new(value = "std::time::Duration::from_secs(20)")]
     pub message_delay: Duration,
 }
@@ -309,7 +311,7 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: RngExt>
             }
 
             let num = self.get_random_number();
-            if num >= VOICE_REPLY_THRESHOLD {
+            if self.config.voice_enabled && num >= VOICE_REPLY_THRESHOLD {
                 let audio = self
                     .gtp_client(chat)
                     .get_audio(result)
@@ -801,8 +803,10 @@ mod tests {
             || build_rng(0),
         );
 
-        let mut message =
-            create_public_message(Some("https://example.com".to_string()), None);
+        let mut message = create_public_message(
+            Some("https://example.com".to_string()),
+            None,
+        );
         message.reply_to_message = Some(Box::new(Message {
             message_id: 2,
             from: User {
@@ -850,8 +854,10 @@ mod tests {
             .returning(|_, _, _| Ok(()));
 
         let bot = create_bot(tg_client, gtp_client, public_gtp_client);
-        let message =
-            create_private_message(Some("https://example.com".to_string()), None);
+        let message = create_private_message(
+            Some("https://example.com".to_string()),
+            None,
+        );
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }
@@ -905,6 +911,49 @@ mod tests {
             .with(eq(123), eq(vec![1, 2, 3]))
             .times(1)
             .returning(|_, _| Ok(()));
+
+        let mut config = Config::new(
+            HashMap::default(),
+            "preamble".to_string(),
+            vec![
+                "Dummy answer",
+                "Another dummy answer",
+                "Yet another dummy answer",
+            ],
+            vec![123],
+            vec!["bot_name"],
+        );
+        config.voice_enabled = true;
+        let bot = TgBot::new(
+            public_gtp_client,
+            gtp_client,
+            tg_client,
+            config,
+            || build_rng(u32::MAX),
+        );
+        let message =
+            create_public_message(Some("bot_name Hello".to_string()), None);
+        let result = bot.process_message(message).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_message_does_not_send_voice_when_disabled() {
+        let mut tg_client = MockTelegramInteractor::new();
+        let gtp_client = MockGtpInteractor::new();
+        let mut public_gtp_client = MockGtpInteractor::new();
+
+        public_gtp_client
+            .expect_get_completion()
+            .with(eq(123), eq("preamble Hello".to_string()))
+            .times(1)
+            .returning(|_, _| Ok(CompletionResult::Text("Hello Sir".into())));
+
+        tg_client
+            .expect_send_message()
+            .with(eq(123), eq("Hello Sir"), eq(Some("MarkdownV2")))
+            .times(1)
+            .returning(|_, _, _| Ok(()));
 
         let bot = TgBot::new(
             public_gtp_client,
