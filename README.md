@@ -39,8 +39,8 @@ NAMES_MAP={"john":"John"}
 Optional:
 
 ```env
-# OpenAI chat endpoint override
-GPT_CHAT_URL=https://api.openai.com/v1/chat/completions
+# OpenAI API base URL override
+GPT_CHAT_URL=https://api.openai.com/v1
 
 # OpenAI image generation model override (default: gpt-image-1)
 GPT_IMAGE_MODEL=gpt-image-1
@@ -53,8 +53,8 @@ GPT_IMAGE_SIZE=1024x1024
 # Empty value means the moderation field is omitted from the request.
 GPT_IMAGE_MODERATION=low
 
-# Private chat model endpoint/profile
-GPT_PRIVATE_CHAT_URL=https://api.openai.com/v1/chat/completions
+# Private chat model API base URL/profile
+GPT_PRIVATE_CHAT_URL=https://api.openai.com/v1
 GPT_PRIVATE_MODEL=gpt-4o-mini
 GPT_PRIVATE_TOKEN=private-openai-token
 PRIVATE_GPT_RULES=private-chat-rules

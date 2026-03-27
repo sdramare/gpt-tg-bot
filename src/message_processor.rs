@@ -151,7 +151,11 @@ impl<TgClient: TelegramInteractor, GtpClient: GtpInteractor, R: RngExt>
         reply_to_message: Option<Box<Message>>,
         text: String,
     ) -> anyhow::Result<()> {
-        if text.contains("https://") {
+        if text.contains("https://")
+            && self.config.tg_bot_allow_chats.contains(&chat.id)
+            && !chat.is_private()
+            && reply_to_message.is_some()
+        {
             self.dummy_reaction(chat.id).await?;
             return Ok(());
         }
@@ -754,6 +758,21 @@ mod tests {
     // Test when the message contains a text with a URL
     #[tokio::test]
     async fn test_process_message_with_url() {
+        let tg_client = MockTelegramInteractor::new();
+        let gtp_client = MockGtpInteractor::new();
+        let public_gtp_client = MockGtpInteractor::new();
+
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message = create_public_message(
+            Some("https://example.com".to_string()),
+            None,
+        );
+        let result = bot.process_message(message).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_message_with_url_reply_in_allowed_chat() {
         let mut tg_client = MockTelegramInteractor::new();
         let gtp_client = MockGtpInteractor::new();
         let public_gtp_client = MockGtpInteractor::new();
@@ -764,11 +783,75 @@ mod tests {
             .times(1)
             .returning(|_, _, _| Ok(()));
 
-        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
-        let message = create_public_message(
-            Some("https://example.com".to_string()),
-            None,
+        let bot = TgBot::new(
+            public_gtp_client,
+            gtp_client,
+            tg_client,
+            Config::new(
+                HashMap::default(),
+                "preamble".to_string(),
+                vec![
+                    "Dummy answer",
+                    "Another dummy answer",
+                    "Yet another dummy answer",
+                ],
+                vec![123],
+                vec!["bot_name"],
+            ),
+            || build_rng(0),
         );
+
+        let mut message =
+            create_public_message(Some("https://example.com".to_string()), None);
+        message.reply_to_message = Some(Box::new(Message {
+            message_id: 2,
+            from: User {
+                id: 2,
+                is_bot: false,
+                first_name: "Alice".to_string(),
+                last_name: None,
+                username: None,
+                language_code: None,
+            },
+            chat: Chat {
+                id: 123,
+                first_name: None,
+                last_name: None,
+                username: None,
+                chat_type: "public".to_string(),
+            },
+            date: Utc::now().naive_utc(),
+            text: Some("reply source".to_string()),
+            caption: None,
+            photo: None,
+            reply_to_message: None,
+        }));
+
+        let result = bot.process_message(message).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_process_message_with_url_in_private_chat_uses_completion() {
+        let mut tg_client = MockTelegramInteractor::new();
+        let mut gtp_client = MockGtpInteractor::new();
+        let public_gtp_client = MockGtpInteractor::new();
+
+        gtp_client
+            .expect_get_completion()
+            .with(eq(123), eq("https://example.com".to_string()))
+            .times(1)
+            .returning(|_, _| Ok(CompletionResult::Text("Hello Sir".into())));
+
+        tg_client
+            .expect_send_message()
+            .with(eq(123), eq("Hello Sir"), eq(Some("MarkdownV2")))
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+
+        let bot = create_bot(tg_client, gtp_client, public_gtp_client);
+        let message =
+            create_private_message(Some("https://example.com".to_string()), None);
         let result = bot.process_message(message).await;
         assert!(result.is_ok());
     }

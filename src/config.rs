@@ -16,7 +16,7 @@ macro_rules! context_env {
     };
 }
 
-const DEFAULT_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const DEFAULT_API_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_VOICE: &str = "onyx";
 const DEFAULT_IMAGE_MODEL: &str = "gpt-image-1";
 
@@ -344,10 +344,7 @@ mod tests {
 
     #[test]
     fn default_api_url_value() {
-        assert_eq!(
-            DEFAULT_API_URL,
-            "https://api.openai.com/v1/chat/completions"
-        );
+        assert_eq!(DEFAULT_API_URL, "https://api.openai.com/v1");
     }
 
     #[test]
