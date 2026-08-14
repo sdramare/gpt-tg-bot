@@ -56,5 +56,10 @@ color-eyre = "0.6.5"
 base64 = "0.23.1"
 dashmap = "6.2.1"
 aws-config = { version = "1.10.1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1.141.0"
+aws-sdk-s3 = { version = "1.141.0", default-features = false, features = [
+    "sigv4a",
+    "http-1x",
+    "default-https-client",
+    "rt-tokio",
+] }
 aws-lc-rs = "1.18.0"
