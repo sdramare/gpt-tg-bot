@@ -15,46 +15,46 @@ edition = "2024"
 # and it will keep the alphabetic ordering for you.
 
 [dev-dependencies]
-mockall = "0.14.0"
+mockall = "0.15.0"
 wiremock = "0.6.5"
 
 [dependencies]
-lambda_http = "1.1.2"
-lambda_runtime = "1.1.2"
+lambda_http = "1.3.0"
+lambda_runtime = "1.3.0"
 tracing = { version = "0.1.44", features = ["log"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "fmt",
     "ansi",
     "json",
 ] }
-reqwest = { version = "0.13.2", default-features = false, features = [
+reqwest = { version = "0.13.4", default-features = false, features = [
     "json",
     "multipart",
     "default-tls",
 ] }
-tokio = { version = "1.50.0", features = ["macros"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+tokio = { version = "1.53.1", features = ["macros"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 derive_more = { version = "2.1.1", features = ["constructor", "from"] }
-futures = "0.3.32"
-anyhow = "1.0.102"
-chrono = { version = "0.4.44", features = ["serde"] }
-rand = "0.10.0"
-phf = { version = "0.13.1", features = ["macros"] }
+futures = "0.3.34"
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", features = ["serde"] }
+rand = "0.10.2"
+phf = { version = "0.14.0", features = ["macros"] }
 dyn-fmt = "0.4.3"
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 dotenvy = "0.15.7"
-log = "0.4.29"
+log = "0.4.33"
 derive-new = "0.7.0"
 reqwest-retry = "0.9.1"
-reqwest-middleware = { version = "0.5.1", features = [
+reqwest-middleware = { version = "0.5.2", features = [
     "json",
     "multipart",
     "query",
 ] }
 color-eyre = "0.6.5"
-base64 = "0.22.1"
-dashmap = "6.1.0"
-aws-config = { version = "1.8.15", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1.127.0"
-aws-lc-rs = "1.16.2"
+base64 = "0.23.1"
+dashmap = "6.2.1"
+aws-config = { version = "1.10.1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1.141.0"
+aws-lc-rs = "1.18.0"
